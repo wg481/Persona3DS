@@ -295,6 +295,34 @@ inline constexpr std::uint64_t kVblankLengthUs = 732u;
     return now_us % period_us < kVblankLengthUs ? 1u : 0u;
 }
 
+// ModuleMgrForUser 0xF0A26395 sceKernelGetModuleId, 0xD1FF982A
+// sceKernelStopModule, 0x2E0911AA sceKernelUnloadModule, 0x8F2DF740
+// sceKernelStopUnloadSelfModuleWithStatus; LoadExecForUser 0x05572A5F
+// sceKernelExitGame. Imported by Persona; added ahead of the game reaching
+// them. Contract: uOFW src/kd/modulemgr (queryModule.c, start-stopModule.c)
+// and pspautotests modules/startoptions, modules/unloadfill (hardware).
+//  GetModuleId: the module containing the caller's return address (uOFW);
+//    a PRX loaded by upstream's sceKernelLoadModule gives its id, anything
+//    else the main module, id 1 as upstream's sceKernelGetModuleIdByAddress
+//    [INFERRED].
+//  StopModule(uid, args, argp, *status, option): module_stop (system export
+//    NID 0xCEE8593C) runs on its own thread, priority 0x20, stack 0x40000
+//    (startoptions.expected), and the call returns 0 with *status = its exit
+//    status (unloadfill.expected); memory is unchanged. Without module_stop
+//    (or an HLE-only module) *status = 0 and 0 [INFERRED, as upstream's
+//    sceKernelStartModule without module_start]. Unknown id 0x8002012E.
+//  UnloadModule(uid): returns >= 0 (unloadfill.expected; the id, uOFW);
+//    the text is filled with `break` (0x0000004D) and data/bss with
+//    0xFFFFFFFF, then the memory is freed. EBOOT stubs bound to its exports
+//    are not unbound [INFERRED: not observed].
+//  StopUnloadSelfModuleWithStatus from the main module, and ExitGame: the
+//    game is quitting; the run stops with a message that says so.
+//  Not modelled, stop and name the call: an SMOption, stopping a module
+//  that is not started or already stopped, unloading a started module that
+//  was not stopped, StopUnloadSelf from a loaded PRX.
+inline constexpr std::uint32_t kMainModuleId = 1u;
+inline constexpr std::uint32_t kModuleStopNid = 0xCEE8593Cu;
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

@@ -5,10 +5,12 @@
 #include "p3p3ds/kernel_state.hpp"
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
+#include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -160,8 +162,45 @@ std::optional<std::uint32_t> umd_wait_result(std::uint32_t stat, std::uint32_t d
 }
 
 namespace {
+// A loaded PRX (upstream ModuleManager) whose memory contains `address`.
+const hle::LoadedModule *module_at(KernelState &kernel, std::uint32_t address) {
+    for (const auto &[uid, module] : kernel.modules().modules)
+        if (!module.hle_only && address >= module.base && address - module.base < module.size) return &module;
+    return nullptr;
+}
+
+// What upstream's sceKernelLoadModule does not keep: text size and module_stop.
+struct ModuleLayout { std::uint32_t text_size{}, module_stop{}; };
+std::optional<ModuleLayout> module_layout(psprecomp::Runtime &rt, KernelState &kernel, const hle::LoadedModule &module) {
+    const auto resolved = kernel.io().resolve(module.path);
+    const auto source = resolved ? resolved->fs->open(resolved->path) : nullptr;
+    if (!source) return std::nullopt;
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(source->size()));
+    (void)source->read(0, bytes.data(), bytes.size());
+    const auto image = psprecomp::Elf32Image::from_bytes(bytes, module.path);
+    ModuleLayout layout;
+    if (!image.segments().empty()) layout.text_size = std::min(image.segments().front().memory_size, module.size);
+    const auto info = image.find_module_info(rt.memory(), module.base);
+    if (!info) return std::nullopt;
+    auto &m = rt.memory();
+    for (std::uint32_t entry = info->ent_top; entry + 16u <= info->ent_end;) { // as upstream modulemgr.cpp
+        const auto name_ptr = m.load32(entry);
+        const auto length = m.load8(entry + 8u), vstubs = m.load8(entry + 9u);
+        const auto stubs = m.load16(entry + 10u);
+        const auto table = m.load32(entry + 12u);
+        for (std::uint32_t i = 0; name_ptr == 0u && i < stubs; ++i)
+            if (m.load32(table + 4u * i) == kModuleStopNid) layout.module_stop = m.load32(table + 4u * (stubs + vstubs + i));
+        entry += std::max<std::uint32_t>(length, 4u) * 4u;
+    }
+    return layout;
+}
+} // namespace
+
+namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
+std::map<std::int32_t, std::int32_t> g_module_stop_threads; // module uid -> thread running module_stop
+std::map<std::int32_t, bool> g_modules_stopped;             // module uid -> module_stop finished
 constexpr std::uint64_t kInterruptCheckDispatches = 32u; // dispatch boundaries between vblank checks
 constexpr std::uint32_t kVblankInterrupt = 30u;
 
@@ -253,6 +292,8 @@ bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexCo
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
     g_vblank_subintr = VblankSubInterrupts{};
+    g_module_stop_threads.clear();
+    g_modules_stopped.clear();
     psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
     const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
         runtime.register_hle("InterruptManager", nid, [fn](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
@@ -465,6 +506,96 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         const auto woken = kernel.threads().wake_host_waiters(rt, WaitType::Umd, kUmdWaitObject, kUmdWaitCanceled);
         rt.event("umd_cancel_wait_drive_stat", {{"woken", static_cast<std::uint32_t>(woken)}});
         ctx.set_gpr(2, 0u);
+    });
+
+    // ModuleMgrForUser::0xF0A26395 - sceKernelGetModuleId
+    runtime.register_hle("ModuleMgrForUser", 0xF0A26395u, [&kernel](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+        const auto *module = module_at(kernel, ctx.gpr[31]);
+        ctx.set_gpr(2, module != nullptr ? static_cast<std::uint32_t>(module->uid) : kMainModuleId);
+    });
+
+    // ModuleMgrForUser::0xD1FF982A - sceKernelStopModule(uid, args, argp, *status, option)
+    runtime.register_hle("ModuleMgrForUser", 0xD1FF982Au, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &tm = kernel.threads();
+        const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+        const std::uint32_t status_ptr = ctx.gpr[7], option = ctx.gpr[8];
+        auto &modules = kernel.modules().modules;
+        const auto it = modules.find(uid);
+        if (it == modules.end()) { ctx.set_gpr(2, 0x8002012Eu); return; } // SCE_ERROR_KERNEL_UNKNOWN_MODULE
+        auto &module = it->second;
+        const auto report = [&](const char *why) {
+            rt.stop("sceKernelStopModule(uid " + std::to_string(uid) + ", option " + psprecomp::hex32(option) + ") " + why +
+                    " is not modelled yet");
+        };
+        const auto finish = [&](std::int32_t status) {
+            if (status_ptr != 0u && rt.memory().contains(status_ptr, 4u)) rt.memory().store32(status_ptr, static_cast<std::uint32_t>(status));
+            g_modules_stopped[uid] = true;
+            rt.event("module_stop", {{"uid", static_cast<std::uint32_t>(uid)}, {"status", static_cast<std::uint32_t>(status)}}, module.name);
+            ctx.set_gpr(2, 0u);
+        };
+        if (const auto thread = g_module_stop_threads.find(uid); thread != g_module_stop_threads.end()) {
+            const auto *t = tm.get_thread(thread->second); // retried after module_stop's thread ended
+            if (t == nullptr || t->status != hle::InternalThreadState::Stopped) return report("while module_stop runs");
+            const auto status = t->exit_status;
+            (void)tm.delete_thread(thread->second);
+            g_module_stop_threads.erase(thread);
+            return finish(status);
+        }
+        if (option != 0u) return report("with an SMOption");
+        if (!module.started) return report("on a module that is not started");
+        if (g_modules_stopped[uid]) return report("on a stopped module");
+        if (module.hle_only) return finish(0);
+        const auto layout = module_layout(rt, kernel, module);
+        if (!layout) return report("(module file or info not found)");
+        if (layout->module_stop == 0u) return finish(0);
+        const auto thid = tm.create_thread("SceModmgrStop", layout->module_stop, 0x20, 0x40000u, 0x80000000u, 0u, rt.memory());
+        if (thid < 0) { ctx.set_gpr(2, static_cast<std::uint32_t>(thid)); return; }
+        g_module_stop_threads[uid] = thid;
+        auto caller = ctx;
+        const auto started = tm.start_thread(thid, ctx.gpr[5], ctx.gpr[6], rt.memory(), caller, false, module.gp);
+        if (started < 0) { g_module_stop_threads.erase(uid); ctx.set_gpr(2, static_cast<std::uint32_t>(started)); return; }
+        hle::WaitInfo wait{hle::WaitType::ThreadEnd, thid};
+        wait.retry = true; // as upstream's sceKernelStartModule
+        tm.block_current(rt, ctx, wait);
+    });
+
+    // ModuleMgrForUser::0x2E0911AA - sceKernelUnloadModule(uid)
+    runtime.register_hle("ModuleMgrForUser", 0x2E0911AAu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+        auto &modules = kernel.modules().modules;
+        const auto it = modules.find(uid);
+        if (it == modules.end()) { ctx.set_gpr(2, 0x8002012Eu); return; }
+        auto &module = it->second;
+        if (module.started && !g_modules_stopped[uid]) {
+            rt.stop("sceKernelUnloadModule(uid " + std::to_string(uid) + ") of a started module that was not stopped is not modelled yet");
+            return;
+        }
+        if (!module.hle_only) {
+            const auto layout = module_layout(rt, kernel, module);
+            auto &m = rt.memory();
+            const std::uint32_t text = layout ? layout->text_size : 0u;
+            for (std::uint32_t off = 0; off + 4u <= module.size; off += 4u) m.store32(module.base + off, off < text ? 0x0000004Du : 0xFFFFFFFFu);
+            (void)kernel.sysmem().free_partition_memory(module.memory_block);
+        }
+        rt.event("module_unload", {{"uid", static_cast<std::uint32_t>(uid)}}, module.name);
+        g_modules_stopped.erase(uid);
+        modules.erase(it);
+        ctx.set_gpr(2, static_cast<std::uint32_t>(uid));
+    });
+
+    // ModuleMgrForUser::0x8F2DF740 - sceKernelStopUnloadSelfModuleWithStatus(exitStatus, args, argp, *status, option)
+    runtime.register_hle("ModuleMgrForUser", 0x8F2DF740u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        if (const auto *module = module_at(kernel, ctx.gpr[31])) {
+            rt.stop("sceKernelStopUnloadSelfModuleWithStatus from module " + module->name + " is not modelled yet");
+            return;
+        }
+        rt.stop("Game exit: the main module called sceKernelStopUnloadSelfModuleWithStatus(" +
+                std::to_string(static_cast<std::int32_t>(ctx.gpr[4])) + ")");
+    });
+
+    // LoadExecForUser::0x05572A5F - sceKernelExitGame
+    runtime.register_hle("LoadExecForUser", 0x05572A5Fu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &) {
+        rt.stop("Game exit: sceKernelExitGame");
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

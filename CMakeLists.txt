@@ -328,6 +328,7 @@ endif()
 # Persona3DS fork: kernel imports in core/src/hle/fork_kernel.cpp.
 add_executable(test_fork_kernel tests/test_fork_kernel.cpp)
 target_link_libraries(test_fork_kernel PRIVATE p3p3ds_core)
+target_compile_definitions(test_fork_kernel PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME p3p_fork_kernel COMMAND test_fork_kernel)
 add_executable(test_fork_vfs tests/test_fork_vfs.cpp)
 target_link_libraries(test_fork_vfs PRIVATE p3p3ds_core)

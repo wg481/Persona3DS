@@ -5,9 +5,12 @@
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/kernel_state.hpp"
 #include "psprecomp/allegrex_context.hpp"
+#include "p3p3ds/vfs.hpp"
 #include "psprecomp/runtime.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <memory>
 #include <iostream>
 #include <string>
 
@@ -695,6 +698,77 @@ void test_umd_wait_drive_stat() {
     CHECK(call(0xC6183D47u, 1u, kDrive) == 0u);           // activate again
     CHECK(call(0x6B4A146Cu, 0u, 0u) == 0x32u);
 }
+
+// Module manager group on pspautotests modules/startoptions/child.prx (an
+// unencrypted PRX with module_start and module_stop), loaded by upstream's
+// sceKernelLoadModule. Skipped without the reference clone.
+void test_module_stop_unload() {
+    const std::filesystem::path dir = std::filesystem::path(P3P_SOURCE_DIR) / "references/pspautotests/tests/modules/startoptions";
+    if (!std::filesystem::exists(dir / "child.prx")) { std::cout << "module test skipped (no pspautotests clone)\n"; return; }
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &tm = kernel.threads();
+    tm.init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    kernel.io().mount("host0:", std::make_shared<p3p3ds::vfs::HostFileSystem>(dir));
+    auto &m = rt.memory();
+    auto call = [&](const char *lib, std::uint32_t nid, std::uint32_t a0, std::uint32_t a1 = 0, std::uint32_t a2 = 0,
+                    std::uint32_t a3 = 0, std::uint32_t t0 = 0, std::uint32_t ra = 0x08804200u) {
+        auto &c = rt.cpu();
+        c.gpr[4] = a0; c.gpr[5] = a1; c.gpr[6] = a2; c.gpr[7] = a3; c.gpr[8] = t0; c.gpr[31] = ra; c.gpr[2] = 0xDEADBEEFu;
+        rt.invoke_import(lib, nid, c);
+        return c.gpr[2];
+    };
+    constexpr std::uint32_t kPath = 0x08900000u, kStatus = 0x08900100u;
+    const char path[] = "host0:/child.prx";
+    for (std::uint32_t i = 0; i < sizeof path; ++i) m.store8(kPath + i, static_cast<std::uint8_t>(path[i]));
+    const auto uid = static_cast<std::int32_t>(call("ModuleMgrForUser", 0x977DE386u, kPath)); // sceKernelLoadModule
+    CHECK(uid > 0);
+    auto &module = kernel.modules().modules.at(uid);
+    CHECK(call("ModuleMgrForUser", 0xF0A26395u, 0u, 0u, 0u, 0u, 0u, module.base + 0x10u) == static_cast<std::uint32_t>(uid));
+    CHECK(call("ModuleMgrForUser", 0xF0A26395u, 0u) == 1u); // the main module, as sceKernelGetModuleIdByAddress
+    CHECK(call("ModuleMgrForUser", 0xD1FF982Au, 0x7777u, 0u, 0u, kStatus) == 0x8002012Eu);
+    module.started = true; // module_start ran (upstream sceKernelStartModule; needs the dispatch loop)
+    const auto root = tm.current_thread_id();
+    (void)call("ModuleMgrForUser", 0xD1FF982Au, static_cast<std::uint32_t>(uid), 0u, 0u, kStatus);
+    CHECK(tm.get_thread(root)->status == p3p3ds::hle::InternalThreadState::Waiting);
+    std::int32_t stopper = 0;
+    for (std::int32_t id = 1; id < 64; ++id)
+        if (const auto *t = tm.get_thread(id); t != nullptr && t->name == "SceModmgrStop") stopper = id;
+    CHECK(stopper != 0);
+    if (stopper == 0) return;
+    const auto *t = tm.get_thread(stopper);
+    CHECK(t->current_priority == 0x20 && t->stack_size >= 0x40000u); // startoptions.expected: stop thread
+    CHECK(t->entry_pc >= module.base && t->entry_pc < module.base + module.size);
+    const std::uint32_t text_word = m.load32(module.base);
+    CHECK(text_word != 0x0000004Du);
+    tm.get_thread(stopper)->status = p3p3ds::hle::InternalThreadState::Stopped; // module_stop returned 5
+    tm.get_thread(stopper)->exit_status = 5;
+    tm.get_thread(root)->status = p3p3ds::hle::InternalThreadState::Running;
+    (void)tm.switch_to(root, rt.cpu());
+    CHECK(call("ModuleMgrForUser", 0xD1FF982Au, static_cast<std::uint32_t>(uid), 0u, 0u, kStatus) == 0u); // retried call
+    CHECK(m.load32(kStatus) == 5u);
+    CHECK(tm.get_thread(stopper) == nullptr);
+    CHECK(m.load32(module.base) == text_word); // unloadfill.expected: stop leaves memory unchanged
+    const auto base = module.base, size = module.size;
+    CHECK(call("ModuleMgrForUser", 0x2E0911AAu, static_cast<std::uint32_t>(uid)) == static_cast<std::uint32_t>(uid));
+    CHECK(m.load32(base) == 0x0000004Du);         // text: break
+    CHECK(m.load32(base + size - 4u) == 0xFFFFFFFFu); // bss
+    CHECK(kernel.modules().modules.count(uid) == 0u);
+    CHECK(call("ModuleMgrForUser", 0x2E0911AAu, static_cast<std::uint32_t>(uid)) == 0x8002012Eu);
+    CHECK(!rt.stopped());
+    (void)call("ModuleMgrForUser", 0x8F2DF740u, 0u); // from the main module: game exit
+    CHECK(rt.stopped() && rt.stop_reason().find("Game exit") != std::string::npos);
+}
+
+// sceKernelExitGame stops the run as a game exit.
+void test_exit_game() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    rt.invoke_import("LoadExecForUser", 0x05572A5Fu, rt.cpu());
+    CHECK(rt.stopped() && rt.stop_reason() == "Game exit: sceKernelExitGame");
+}
 } // namespace
 
 int main() {
@@ -744,6 +818,8 @@ int main() {
     test_mpeg_decode_stop_ycbcr();
     test_display_is_vblank();
     test_umd_wait_drive_stat();
+    test_module_stop_unload();
+    test_exit_game();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
