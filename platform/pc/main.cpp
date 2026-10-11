@@ -6,6 +6,7 @@
 #include "telemetry.hpp"
 #include "profile_info.hpp"
 #include "p3p3ds/fork_vfs.hpp"
+#include "p3p3ds/hle/fork_media.hpp"
 #include "frame_dump.hpp"
 #include "pcm_mixer.hpp"
 #include "host_input.hpp"
@@ -137,6 +138,10 @@ int main(int argc,char **argv) {
                 kernel.io().alias(p3p3ds::profile::mods_alias,std::make_shared<p3p3ds::vfs::HostFileSystem>(mods_path,true)); // read-only: cached lookups
                 std::cout<<"Mods: "<<p3p3ds::profile::mods_alias<<" -> "<<mods_path.string()<<"\n";
             }
+            // Persona3DS: converted music next to the game data (tools/convert_media.py).
+            auto &media=p3p3ds::hle::media::fork_media();
+            media.set_dir((elf_path.parent_path()/"media").string());
+            if(media.stats().entries) std::cout<<"Media: "<<media.stats().entries<<" converted tracks in "<<media.dir()<<"\n";
         }
         kernel.threads().init_root_thread("root",entry,sp,module->gp);
         {

@@ -31,6 +31,7 @@
 #include "bootstrap_expectations.hpp"
 #include "profile_info.hpp"
 #include "p3p3ds/fork_vfs.hpp"
+#include "p3p3ds/hle/fork_media.hpp"
 #include "gpu_renderer.hpp"
 #include "p3p3ds/ge/async_renderer.hpp"
 #include "psprecomp/elf32.hpp"
@@ -617,6 +618,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "linear free : %lu KiB\n"
         "cores  : %s\n"
         "iso    : %s\n"
+        "music  : %lu converted, %lu matched, %lu unmatched\n"
         "stop   : %s\n"
         "%s"
         "\nSTART+SELECT: quit\n",
@@ -627,6 +629,9 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         static_cast<unsigned long>(osGetMemRegionFree(MEMREGION_APPLICATION) / 1024u),
         static_cast<unsigned long>(osGetMemRegionSize(MEMREGION_APPLICATION) / 1024u),
         static_cast<unsigned long>(linearSpaceFree() / 1024u), s.cores.c_str(), s.iso.c_str(),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().entries),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().matched),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().unmatched),
         rt.stopped() ? rt.stop_reason().c_str() : "-", profile_text(s).c_str());
     return buf;
 }
@@ -768,6 +773,7 @@ int main() {
         // Read-only and unchanged while the game runs: lookups cached (vfs.hpp).
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
+        p3p3ds::hle::media::fork_media().set_dir(std::string(kBase) + "/media"); // Persona3DS: converted music
         kernel.threads().init_root_thread("root", entry, sp, module->gp);
         std::set<std::uint32_t> stubs;
         std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>> imports;

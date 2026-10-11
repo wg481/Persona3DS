@@ -27,6 +27,7 @@ set(P3P3DS_CORE_SOURCES
     core/src/hle/audio.cpp
     core/src/hle/fork_kernel.cpp # Persona3DS fork
     core/src/hle/fork_atrac.cpp # Persona3DS fork
+    core/src/hle/fork_media.cpp # Persona3DS fork
     core/src/fork_vfs.cpp # Persona3DS fork
 )
 

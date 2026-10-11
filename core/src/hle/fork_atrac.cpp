@@ -3,6 +3,7 @@
 // uOFW routine addresses.
 #include "p3p3ds/hle/fork_atrac.hpp"
 
+#include "p3p3ds/hle/fork_media.hpp"
 #include "p3p3ds/kernel_state.hpp"
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
@@ -576,6 +577,8 @@ std::int32_t Library::release_atrac_id(int id) {
     if (id < 0 || id >= kMaxIds) return kErrNoId;
     if (ids_[id].state > 0 && ids_[id].state != 16) {
         ids_[id].state = -1;
+        tracks_[id].reset();
+        track_names_[id].clear();
         return 0;
     }
     return kErrNoId;
@@ -588,9 +591,18 @@ std::int32_t Library::set_halfway(psprecomp::GuestMemory &m, IdInfo &id, std::ui
     (void)load_wave_file(m, readByte, f, buffer);
     std::int32_t ret = set_buffer(id, buffer, readByte, bufferByte, f);
     if (ret < 0) return ret;
+    attach_track(m, id, buffer, readByte);
     ret = reset_id(m, id); // 1284: sceAudiocodecInit always succeeds here
     if ((id.state & 4) != 0) copy_buffer(m, id, bufferByte);
     return ret;
+}
+
+// Persona3DS: the converted track for the .at3 data starting at `buffer`, if any.
+void Library::attach_track(psprecomp::GuestMemory &m, IdInfo &id, std::uint32_t buffer, std::uint32_t readByte) {
+    const auto n = static_cast<int>(&id - ids_);
+    track_names_[n].clear();
+    track_offsets_[n] = 0;
+    tracks_[n] = media::fork_media().find_atrac(m, buffer, readByte, track_offsets_[n], &track_names_[n]);
 }
 
 std::int32_t Library::set_halfway_buffer(psprecomp::GuestMemory &m, int id, std::uint32_t buffer, std::uint32_t readByte,
@@ -652,7 +664,15 @@ std::int32_t Library::decode_frame(psprecomp::GuestMemory &m, IdInfo &i, std::ui
         if (i.numFrame == 0) {
             *samples = next;
             *finish = i.endSample < i.decodePos + next ? (i.loopNum == 0 ? 1u : 0u) : 0u;
-            if (next != 0u && out != 0u && m.contains(out, next * 4u)) m.zero(out, next * 4u); // stereo S16 output (SetData, not MOut)
+            if (next != 0u && out != 0u && m.contains(out, next * 4u)) { // stereo S16 output (SetData, not MOut)
+                const auto n = static_cast<std::size_t>(&i - ids_);
+                std::uint8_t *dst = tracks_[n] != nullptr ? m.raw_pointer(out, next * 4u) : nullptr;
+                if (dst != nullptr && (reinterpret_cast<std::uintptr_t>(dst) & 1u) == 0u)
+                    tracks_[n]->read_stereo(static_cast<std::int64_t>(i.decodePos) + track_offsets_[n], next,
+                                            reinterpret_cast<std::int16_t *>(dst));
+                else
+                    m.zero(out, next * 4u);
+            }
             i.decodePos += next;
             if (i.loopEnd != 0u && (i.loopNum != 0 || i.loopEnd >= i.decodePos) && i.loopEnd < i.decodePos) {
                 i.curOff = get_off_from_sample(i, i.loopStart);
@@ -902,6 +922,18 @@ void register_fork_atrac(psprecomp::Runtime &runtime, KernelState &) {
     using Rt = psprecomp::Runtime;
     const auto sid = [](const Ctx &ctx) { return static_cast<int>(ctx.gpr[4]); };
     const auto ret = [](Ctx &ctx, std::int32_t v) { ctx.set_gpr(2, static_cast<std::uint32_t>(v)); };
+    // Persona3DS: event when a SetData call attached a converted track (fork_media.hpp);
+    // `id` < 0 takes the ID from the result (the ...AndGetID calls).
+    const auto set_ret = [](Rt &rt, Ctx &ctx, int id, std::int32_t v) {
+        ctx.set_gpr(2, static_cast<std::uint32_t>(v));
+        if (v < 0) return;
+        const bool get_id = id < 0;
+        if (get_id) id = v;
+        const auto &name = g_library.track_name(id);
+        const auto &stats = media::fork_media().stats();
+        if (!name.empty()) rt.event("atrac_track", {{"id", static_cast<std::uint32_t>(id)}}, name);
+        else if (stats.entries != 0u) rt.event("atrac_track_unmatched", {{"id", static_cast<std::uint32_t>(id)}, {"buffer", ctx.gpr[get_id ? 4 : 5]}});
+    };
     // Out-parameter writes: a PSP crashes on an invalid pointer (pspautotests "Crashes." cases).
     const auto out32 = [](Rt &rt, std::uint32_t at, std::uint32_t v, const char *what) {
         if (!rt.memory().contains(at, 4u)) { rt.stop(std::string("sceAtrac: invalid ") + what + " pointer " + psprecomp::hex32(at)); return false; }
@@ -911,17 +943,17 @@ void register_fork_atrac(psprecomp::Runtime &runtime, KernelState &) {
 
     reg(0x780F88D1u, [ret](Rt &, Ctx &ctx) { ret(ctx, g_library.get_atrac_id(ctx.gpr[4])); });                 // sceAtracGetAtracID
     reg(0x61EB33F5u, [ret, sid](Rt &, Ctx &ctx) { ret(ctx, g_library.release_atrac_id(sid(ctx))); });           // sceAtracReleaseAtracID
-    reg(0x0E2A73ABu, [ret, sid](Rt &rt, Ctx &ctx) {                                                             // sceAtracSetData
-        ret(ctx, g_library.set_halfway_buffer(rt.memory(), sid(ctx), ctx.gpr[5], ctx.gpr[6], ctx.gpr[6]));
+    reg(0x0E2A73ABu, [set_ret, sid](Rt &rt, Ctx &ctx) {                                                             // sceAtracSetData
+        set_ret(rt, ctx, sid(ctx), g_library.set_halfway_buffer(rt.memory(), sid(ctx), ctx.gpr[5], ctx.gpr[6], ctx.gpr[6]));
     });
-    reg(0x7A20E7AFu, [ret](Rt &rt, Ctx &ctx) {                                                                  // sceAtracSetDataAndGetID
-        ret(ctx, g_library.set_halfway_buffer_and_get_id(rt.memory(), ctx.gpr[4], ctx.gpr[5], ctx.gpr[5]));
+    reg(0x7A20E7AFu, [set_ret](Rt &rt, Ctx &ctx) {                                                                  // sceAtracSetDataAndGetID
+        set_ret(rt, ctx, -1, g_library.set_halfway_buffer_and_get_id(rt.memory(), ctx.gpr[4], ctx.gpr[5], ctx.gpr[5]));
     });
-    reg(0x3F6E26B5u, [ret, sid](Rt &rt, Ctx &ctx) {                                                             // sceAtracSetHalfwayBuffer
-        ret(ctx, g_library.set_halfway_buffer(rt.memory(), sid(ctx), ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]));
+    reg(0x3F6E26B5u, [set_ret, sid](Rt &rt, Ctx &ctx) {                                                             // sceAtracSetHalfwayBuffer
+        set_ret(rt, ctx, sid(ctx), g_library.set_halfway_buffer(rt.memory(), sid(ctx), ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]));
     });
-    reg(0x0FAE370Eu, [ret](Rt &rt, Ctx &ctx) {                                                                  // sceAtracSetHalfwayBufferAndGetID
-        ret(ctx, g_library.set_halfway_buffer_and_get_id(rt.memory(), ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]));
+    reg(0x0FAE370Eu, [set_ret](Rt &rt, Ctx &ctx) {                                                                  // sceAtracSetHalfwayBufferAndGetID
+        set_ret(rt, ctx, -1, g_library.set_halfway_buffer_and_get_id(rt.memory(), ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]));
     });
     reg(0x6A8C3CD5u, [ret, sid, out32](Rt &rt, Ctx &ctx) {                                                      // sceAtracDecodeData
         std::uint32_t samples = 0u, finish = 0u;

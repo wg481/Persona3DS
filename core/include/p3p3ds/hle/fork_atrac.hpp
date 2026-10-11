@@ -6,7 +6,9 @@
 // operating on guest memory. The codec call (sceAudiocodecDecode) is replaced
 // by silence: no ATRAC3 / ATRAC3plus decoder exists in the workspace, so every
 // decoded frame is zero samples while all container-level values (IDs, buffer
-// states, stream positions, loops, remaining frames) follow the library.
+// states, stream positions, loops, remaining frames) follow the library. When
+// the track was converted ahead of time (fork_media.hpp), the samples come
+// from the converted file at the library's decode position instead.
 // Checked against pspautotests tests/audio/atrac (hardware) by
 // tests/test_fork_atrac.cpp; where hardware and uOFW disagree, the hardware
 // result is used and the difference is noted at the change.
@@ -14,9 +16,12 @@
 // Persona (ULUS-10432) imports 14 of these (first run's import diff); the
 // others are modelled because the hardware tests need them.
 #include <cstdint>
+#include <memory>
+#include <string>
 
 namespace psprecomp { class Runtime; class GuestMemory; }
 namespace p3p3ds { class KernelState; }
+namespace p3p3ds::hle::media { class ImaTrack; }
 
 namespace p3p3ds::hle::atrac {
 
@@ -76,9 +81,15 @@ public:
 
     [[nodiscard]] const IdInfo *info(int id) const noexcept { return id >= 0 && id < kMaxIds ? &ids_[id] : nullptr; }
     void set_state_for_test(int id, std::int8_t state) noexcept { ids_[id].state = state; }
+    // Converted track serving this ID's PCM (fork_media.hpp), or empty: silence.
+    [[nodiscard]] const std::string &track_name(int id) const noexcept { static const std::string none; return id >= 0 && id < kMaxIds ? track_names_[id] : none; }
 
 private:
     IdInfo ids_[kMaxIds]{};
+    std::shared_ptr<media::ImaTrack> tracks_[kMaxIds];
+    std::int32_t track_offsets_[kMaxIds]{};
+    std::string track_names_[kMaxIds];
+    void attach_track(psprecomp::GuestMemory &m, IdInfo &id, std::uint32_t buffer, std::uint32_t readByte);
     [[nodiscard]] bool usable(int id) const noexcept { return id >= 0 && id < kMaxIds && ids_[id].state > 0; }
     std::int32_t set_halfway(psprecomp::GuestMemory &m, IdInfo &id, std::uint32_t buffer, std::uint32_t readByte, std::uint32_t bufferByte);
     std::int32_t reset_id(psprecomp::GuestMemory &m, IdInfo &id);
