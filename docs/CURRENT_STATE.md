@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## p3p_mpeg: pspautotests re-recording (2026-10-11)
+
+- [VERIFIED] Reproduced on Linux (GCC 13) with a fresh pspautotests clone: `basic.expected lines compared=2905 mismatches=180`, every mismatch `sceMpegGetAtracAu: 80618001 (at 00000000)` vs `(at 00040800)`. Pre-existing upstream: `core/`, `recomp/` and `tests/test_mpeg.cpp` are identical to upstream (`git diff master..p1-retarget` empty for them), and pspautotests commit `d66aeae` (2026-10-10, "re-record basic") rebuilt `basic.prx` and changed exactly those 180 lines after upstream's last `test_mpeg.cpp` change (2026-10-02).
+- [VERIFIED] The value is not firmware output: `tests/video/mpeg/basic.c:10` declares `void *abuffer;` uninitialized, and every `sceMpegGetAtracAu` in `basic.expected` fails (`80618001`, no `00000000` result), so line 29 prints stack contents of that build of the test program.
+- Fix (minimal patch, `P3P3DS:` comments in `tests/test_mpeg.cpp`): for a failed `sceMpegGetAtracAu` only the result is compared. [VERIFIED] `mismatches=0`, PASS against both the current `basic.expected` and the one before `d66aeae`.
+
 ## Persona: first PC run, measured profile (2026-10-11)
 
 All measurements by the maintainer on their own ULUS-10432 copy (Windows, MSYS2 UCRT64, GCC 16.1); this session had no game data and recorded them in `profiles/p1p/`.
