@@ -85,6 +85,19 @@ struct PspDateTime {
 inline constexpr std::uint64_t kForkRtcEpochSeconds = 1199145600u; // = utils.cpp kEpochSeconds
 [[nodiscard]] PspDateTime psp_date_time(std::uint64_t unix_microseconds) noexcept;
 
+// sceRtc::0x6FF40ACC
+// int sceRtcGetTick(const ScePspDateTime *date, u64 *tick);
+// tick = microseconds since 0001-01-01 00:00 (proleptic Gregorian).
+// pspautotests rtc/convert.expected (hardware): 0010-01-01 -> 283996800000000,
+// 9998-01-01 -> 315474825600000000, 9999-01-01 -> 315506361600000000, years 0
+// and 10000 -> 0x800001FE with *tick unchanged; convert.c: 1970-01-01 is
+// 62135596800000000. Validity follows sceRtcCheckValid (rtc/lookup.expected:
+// year, month, day, hour, minute, second, microsecond each checked);
+// [INFERRED] any invalid field gives the same 0x800001FE. uOFW rtc.c: a
+// kernel-space tick pointer from user mode returns 0x80000023.
+[[nodiscard]] bool psp_date_time_valid(const PspDateTime &t) noexcept;
+[[nodiscard]] std::uint64_t psp_tick(const PspDateTime &t) noexcept; // valid dates only
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);
 
 } // namespace p3p3ds::hle

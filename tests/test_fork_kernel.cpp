@@ -141,6 +141,45 @@ void test_rtc_local_time() {
     rt.invoke_import("sceRtc", 0xE7C27D1Bu, rt.cpu());
     CHECK(rt.stopped());
 }
+// sceRtc::0x6FF40ACC with pspautotests rtc/convert.expected values (hardware).
+void test_rtc_get_tick() {
+    using p3p3ds::hle::PspDateTime;
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    constexpr std::uint32_t kDate = 0x08B00000u, kTick = 0x08B00020u;
+    auto &m = rt.memory();
+    const auto get_tick = [&](PspDateTime t, std::uint64_t *out) {
+        m.store16(kDate, t.year); m.store16(kDate + 2u, t.month); m.store16(kDate + 4u, t.day);
+        m.store16(kDate + 6u, t.hour); m.store16(kDate + 8u, t.minute); m.store16(kDate + 10u, t.second);
+        m.store32(kDate + 12u, t.microsecond);
+        rt.cpu().set_gpr(4, kDate);
+        rt.cpu().set_gpr(5, kTick);
+        rt.invoke_import("sceRtc", 0x6FF40ACCu, rt.cpu());
+        *out = m.load32(kTick) | (static_cast<std::uint64_t>(m.load32(kTick + 4u)) << 32);
+        return rt.cpu().gpr[2];
+    };
+    std::uint64_t tick = 0;
+    CHECK(get_tick({10, 1, 1, 0, 0, 0, 0}, &tick) == 0u && tick == 283996800000000ull);      // "Normal"
+    CHECK(get_tick({9998, 1, 1, 0, 0, 0, 0}, &tick) == 0u && tick == 315474825600000000ull); // "Bad date" (valid)
+    CHECK(get_tick({0, 1, 1, 0, 0, 0, 0}, &tick) == 0x800001FEu && tick == 315474825600000000ull); // "Min year", unchanged
+    CHECK(get_tick({9999, 1, 1, 0, 0, 0, 0}, &tick) == 0u && tick == 315506361600000000ull); // "Max year"
+    CHECK(get_tick({10000, 1, 1, 0, 0, 0, 0}, &tick) == 0x800001FEu && tick == 315506361600000000ull); // "Year overflow"
+    CHECK(get_tick({1970, 1, 1, 0, 0, 0, 0}, &tick) == 0u && tick == 62135596800000000ull); // convert.c constant
+    CHECK(get_tick({2008, 2, 29, 23, 59, 59, 999999}, &tick) == 0u);
+    CHECK(get_tick({2009, 2, 29, 0, 0, 0, 0}, &tick) == 0x800001FEu); // not a leap year
+    CHECK(get_tick({2012, 13, 1, 0, 0, 0, 0}, &tick) == 0x800001FEu);
+    CHECK(get_tick({2012, 9, 20, 24, 0, 0, 0}, &tick) == 0x800001FEu);
+    CHECK(get_tick({2012, 9, 20, 0, 0, 0, 1000000}, &tick) == 0x800001FEu);
+    CHECK(!rt.stopped());
+    // The clock and the tick agree: the fixed epoch 2008-01-01 is 1199145600 s after 1970.
+    CHECK(get_tick(p3p3ds::hle::psp_date_time(p3p3ds::hle::kForkRtcEpochSeconds * 1000000u), &tick) == 0u &&
+          tick == 62135596800000000ull + p3p3ds::hle::kForkRtcEpochSeconds * 1000000u);
+    rt.cpu().set_gpr(4, kDate);
+    rt.cpu().set_gpr(5, 0x88000000u);
+    rt.invoke_import("sceRtc", 0x6FF40ACCu, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == 0x80000023u);
+}
 } // namespace
 
 int main() {
@@ -173,6 +212,7 @@ int main() {
     test_power_register_callback();
     test_ctrl_sampling_cycle();
     test_rtc_local_time();
+    test_rtc_get_tick();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

@@ -66,7 +66,51 @@ PspDateTime psp_date_time(std::uint64_t unix_microseconds) noexcept {
                        static_cast<std::uint16_t>(rest % 60u), static_cast<std::uint32_t>(unix_microseconds % 1000000u)};
 }
 
+namespace {
+bool leap_year(std::uint32_t y) noexcept { return (y % 4u == 0u && y % 100u != 0u) || y % 400u == 0u; }
+
+// Days since 0001-01-01 (H. Hinnant's days_from_civil, shifted from 1970).
+std::uint64_t days_since_year_one(std::uint32_t y, std::uint32_t m, std::uint32_t d) noexcept {
+    y -= m <= 2u ? 1u : 0u;
+    const std::uint64_t era = y / 400u, yoe = y - era * 400u;
+    const std::uint64_t doy = (153u * (m > 2u ? m - 3u : m + 9u) + 2u) / 5u + d - 1u;
+    const std::uint64_t doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return era * 146097u + doe - 306u; // 0000-03-01 based count minus the days to 0001-01-01
+}
+} // namespace
+
+bool psp_date_time_valid(const PspDateTime &t) noexcept {
+    static constexpr std::uint8_t kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (t.year < 1u || t.year > 9999u || t.month < 1u || t.month > 12u) return false;
+    const std::uint32_t days = kDays[t.month - 1u] + (t.month == 2u && leap_year(t.year) ? 1u : 0u);
+    return t.day >= 1u && t.day <= days && t.hour < 24u && t.minute < 60u && t.second < 60u && t.microsecond < 1000000u;
+}
+
+std::uint64_t psp_tick(const PspDateTime &t) noexcept {
+    const std::uint64_t seconds = days_since_year_one(t.year, t.month, t.day) * 86400u + t.hour * 3600u + t.minute * 60u + t.second;
+    return seconds * 1000000u + t.microsecond;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
+    // sceRtc::0x6FF40ACC - sceRtcGetTick
+    runtime.register_hle("sceRtc", 0x6FF40ACCu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const std::uint32_t date = ctx.gpr[4], tick = ctx.gpr[5]; // $a0, $a1
+        if ((tick & 0x80000000u) != 0u) { ctx.set_gpr(2, 0x80000023u); return; }
+        auto &m = rt.memory();
+        if (!m.contains(date, 16u) || !m.contains(tick, 8u)) { // a real PSP faults
+            rt.stop("sceRtcGetTick: date " + psprecomp::hex32(date) + " or tick " + psprecomp::hex32(tick) + " is not guest memory");
+            return;
+        }
+        const PspDateTime t{m.load16(date), m.load16(date + 2u), m.load16(date + 4u), m.load16(date + 6u),
+                            m.load16(date + 8u), m.load16(date + 10u), m.load32(date + 12u)};
+        if (!psp_date_time_valid(t)) { ctx.set_gpr(2, 0x800001FEu); return; }
+        const auto value = psp_tick(t);
+        m.store32(tick, static_cast<std::uint32_t>(value));
+        m.store32(tick + 4u, static_cast<std::uint32_t>(value >> 32));
+        ctx.set_gpr(2, 0u);
+    });
+
+
     // sceRtc::0xE7C27D1B - sceRtcGetCurrentClockLocalTime
     runtime.register_hle("sceRtc", 0xE7C27D1Bu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const std::uint32_t out = ctx.gpr[4]; // $a0

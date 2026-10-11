@@ -2,6 +2,19 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 5 and blocker 5: sceRtcGetTick (2026-10-11)
+
+Maintainer's PC (clone at `070aa0ae`), same run options; CTest 27/27 on Windows (`p3p_modulemgr` skipped). Everything before the stop is identical to run 4 (same GE lists, display, threads, audio).
+
+- [VERIFIED] Blocker 4 is cleared. `dump_function ... 0x088160A8 12`: `$a0 = 0x08CC2798` (`lui 0x08CC` + `addiu 0x2798`) for `sceRtcGetCurrentClockLocalTime` at `0x088160C8` (a user buffer); then `$a0 = 0x08CC2798` (the same date) and `$a1 = 0x08CC2790` for the tail `j` at `0x088160E4`.
+- [VERIFIED] New stop: `Missing HLE import sceRtc::0x6FF40ACC` (`sceRtcGetTick`, uOFW `src/kd/rtc/exports`) at `0x089812EC`.
+- Semantics: uOFW's `sceRtcGetTick` is an unfinished stub (only the kernel-pointer check, `0x80000023`). [VERIFIED] pspautotests `rtc/convert.expected` (hardware): tick = microseconds since 0001-01-01 (0010-01-01 -> 283996800000000, 9998-01-01 -> 315474825600000000, 9999-01-01 -> 315506361600000000); years 0 and 10000 return `0x800001FE` and leave `*tick` unchanged. `rtc/lookup.expected`: `sceRtcCheckValid` checks year, month, day, hour, minute, second and microsecond separately. [INFERRED] any invalid field makes `sceRtcGetTick` return `0x800001FE`.
+- Implementation in `core/src/hle/fork_kernel.cpp` (`psp_date_time_valid`, `psp_tick`); pointers outside guest memory stop the run.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: the five hardware values above, 1970-01-01 = 62135596800000000 (`convert.c`), leap-day and out-of-range fields, the fixed clock epoch round trip, `0x80000023` for a kernel tick pointer; 13 failures with the handler disabled. Host CTest 25/25 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
+Next task: the maintainer's PC run 6.
+
 ## Persona run 4: first GE lists, display mode, sound threads; blocker 4: sceRtcGetCurrentClockLocalTime (2026-10-11)
 
 Maintainer's PC (clone at `8bf29028`), same run options; CTest 27/27 on Windows (`p3p_modulemgr` skipped).
