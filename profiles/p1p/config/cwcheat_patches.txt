@@ -1,0 +1,3 @@
+# CWCheat code titles ("_C" names) applied to the EBOOT before AOT generation,
+# one per line. Needs P3P_PROFILE_CWCHEAT_INI (profile.cmake) to point at a
+# .ini. Empty: no patches.

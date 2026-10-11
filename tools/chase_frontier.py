@@ -17,9 +17,18 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE = ROOT / "profiles/p3p/config/p3p_functions.csv"
-SEEDS = ROOT / "profiles/p3p/config/frontier_seeds.csv"
-ELF = ROOT / "profiles/p3p/game/eboot.elf"
+# Game profile, as CMake's P3P_PROFILE_DIR (same default).
+PROFILE = ROOT / os.environ.get("P3P_PROFILE_DIR", "profiles/p1p")
+
+
+def _functions_csv():
+    found = sorted((PROFILE / "config").glob("*_functions.csv"))
+    return found[0] if len(found) == 1 else PROFILE / "config/functions.csv"
+
+
+BASE = _functions_csv()
+SEEDS = PROFILE / "config/frontier_seeds.csv"
+ELF = PROFILE / "game/eboot.elf"
 
 
 def aot_mode(build):
@@ -33,7 +42,7 @@ def aot_mode(build):
 
 def aot_layout():
     import re
-    text = (ROOT / "profiles/p3p/config/aot_layout.cmake").read_text(encoding="utf-8")
+    text = (PROFILE / "config/aot_layout.cmake").read_text(encoding="utf-8")
     return dict(re.findall(r'set\((P3P_AOT_[A-Z_]+) "?([^")]+)"?\)', text))
 
 
@@ -46,7 +55,8 @@ def contained(path):
 
 def rows(path):
     with Path(path).open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+        # '#' lines are comments (placeholder rows of a profile not yet measured).
+        reader = csv.DictReader(line for line in f if not line.lstrip().startswith("#"))
         if reader.fieldnames != ["name", "address", "size"]:
             raise ValueError("invalid seed manifest header")
         result = list(reader)

@@ -1,5 +1,6 @@
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/hle/display.hpp"
+#include "p3p3ds/hle/fork_kernel.hpp" // Persona3DS fork
 #include "p3p3ds/hle/audio.hpp"
 #include "p3p3ds/hle/iofilemgr.hpp"
 #include "p3p3ds/hle/modulemgr.hpp"
@@ -29,6 +30,7 @@ void register_all_hle_modules(psprecomp::Runtime &runtime, KernelState &kernel) 
     register_utility_module(runtime, kernel);
     register_utils_module(runtime, kernel);
     register_ctrl_module(runtime, kernel);
+    register_fork_kernel_imports(runtime, kernel); // Persona3DS fork (fork_kernel.cpp)
 
     // ModuleMgrForUser::0xD8B73127 - sceKernelGetModuleIdByAddress
     runtime.register_hle("ModuleMgrForUser", 0xD8B73127u,

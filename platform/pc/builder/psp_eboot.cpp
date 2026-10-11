@@ -135,7 +135,14 @@ std::vector<std::uint8_t> aes128_cbc_decrypt(const std::uint8_t key[16], const s
 std::vector<std::uint8_t> decrypt_eboot(const std::vector<std::uint8_t> &eboot) {
     if (eboot.size() < 0x150) throw std::runtime_error("EBOOT.BIN is truncated.");
     if (std::memcmp(eboot.data(), "~PSP", 4) != 0) throw std::runtime_error("EBOOT.BIN is not an encrypted PSP executable (~PSP header missing).");
-    if (le32(&eboot[0xD0]) != kTag) throw std::runtime_error("EBOOT.BIN uses an unsupported encryption tag: is this ULUS-10512?");
+    if (const std::uint32_t tag = le32(&eboot[0xD0]); tag != kTag) {
+        char hex[11];
+        std::snprintf(hex, sizeof hex, "0x%08X", static_cast<unsigned>(tag));
+        throw std::runtime_error(std::string("EBOOT.BIN uses encryption tag ") + hex +
+                                 ", which the Builder does not support yet (only 0xD91613F0). "
+                                 "The Builder cannot build this game yet: decrypt the EBOOT with PPSSPP and prepare it with "
+                                 "tools/prepare_game.py --decrypted-eboot <file>.");
+    }
     if ((eboot[0x06] | (eboot[0x07] << 8)) & 1u) throw std::runtime_error("Compressed EBOOT.BIN is not supported.");
     if (eboot[0x7C] != 9) throw std::runtime_error("EBOOT.BIN is not a UMD game executable.");
     const std::uint32_t payload_size = le32(&eboot[0xB0]);

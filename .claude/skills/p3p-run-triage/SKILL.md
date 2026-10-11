@@ -27,7 +27,7 @@ grep -aE "Stop Reason|Blocker type|\[AUDIO\]" .tmp/run.log
 python .claude/skills/p3p-run-triage/scripts/summarize_events.py .tmp/run.json --last 12
 ```
 
-Reference points (ULUS-10512, i5-12400F): 20M dispatches ≈ 44 s wall ≈ 3,860 frames ≈ 146 s virtual and reaches the title screen at frame 3600; 200M ≈ 7 min. Unbounded runs (`2000000000`) take many minutes: background them.
+Reference points (upstream P3P ULUS-10512, i5-12400F; Persona not measured yet): 20M dispatches ≈ 44 s wall ≈ 3,860 frames ≈ 146 s virtual and reaches the title screen at frame 3600; 200M ≈ 7 min. Unbounded runs (`2000000000`) take many minutes: background them.
 
 `--verify-bootstrap --max-dispatches 100000` must still print `Stable bootstrap: PASS` (CTest `p3p_pc_bootstrap_smoke`).
 
@@ -57,9 +57,9 @@ Many frames at once (needs `--dump-events`; labels each frame with its vblank, p
 python .claude/skills/p3p-run-triage/scripts/contact_sheet.py .tmp/frames .tmp/run.json .tmp/sheet.png [first_vblank] [last_vblank]
 ```
 
-Finding an in-game route (menus, map cursor) is iterative: change the input script, rerun, look at the sheet. `scripts/try_route.sh <name> <input> <max dispatches> <from vblank> <frame every> [ms0] [savedata]` does one iteration into `.tmp/route/<name>.png` (rasterization only from shortly before `<from vblank>`). Routes that need the maintainer's own save go to `profiles/p3p/input/local/` (git-ignored: saves are game data). Field cursor: hold a direction 5+ vblanks (2-vblank taps do not move it); menus often need one CROSS to dismiss the prompt before the choices appear.
+Finding an in-game route (menus, map cursor) is iterative: change the input script, rerun, look at the sheet. `scripts/try_route.sh <name> <input> <max dispatches> <from vblank> <frame every> [ms0] [savedata]` does one iteration into `.tmp/route/<name>.png` (rasterization only from shortly before `<from vblank>`). Routes that need the maintainer's own save go to `<P3P_PROFILE_DIR>/input/local/` (git-ignored: saves are game data). Field cursor: hold a direction 5+ vblanks (2-vblank taps do not move it); menus often need one CROSS to dismiss the prompt before the choices appear.
 
-Then open the PNG with the Read tool. Known milestones: ATLUS logo ≈ frames 70-140, CRIWARE ≈ 150-220, opening movie (black: no H.264 decoder) until ≈ 3240, title "PRESS ANY BUTTON" ≈ 3300-3840, then the attract loop repeats.
+Then open the PNG with the Read tool. Known milestones (upstream P3P): ATLUS logo ≈ frames 70-140, CRIWARE ≈ 150-220, opening movie (black: no H.264 decoder) until ≈ 3240, title "PRESS ANY BUTTON" ≈ 3300-3840, then the attract loop repeats.
 
 Audio: `[AUDIO] buffers= frames= nonzero= peak= late= clipped=`. `late` or `clipped` > 0 is a bug signal. Silence before ≈ 115 s is expected (movie ATRAC3plus has no decoder). Claims that audio "sounds right" stay `[UNVERIFIED]` until a human listens.
 
@@ -73,7 +73,7 @@ Must print `REPLAY IDENTICAL`. Record the event-dump SHA-256 in `docs/CURRENT_ST
 
 ## 5a. Where host time goes (speed work)
 
-Per-draw state of one frame: `--draw-log <file> --draw-log-from <frame index>` (index as in the `frame_N.bmp` names) logs every GE draw of the next two displayed frames (texture, blend, depth, culling, screen bounds; bones and weights for skinned draws). To find which draw paints a region, compare the bounds; to see a texture, decode it with `ge::decode_texture` in a throwaway patch. The first battle route needs the maintainer's 4/9 save (`profiles/p3p/input/local/first_battle.txt`, header explains it).
+Per-draw state of one frame: `--draw-log <file> --draw-log-from <frame index>` (index as in the `frame_N.bmp` names) logs every GE draw of the next two displayed frames (texture, blend, depth, culling, screen bounds; bones and weights for skinned draws). To find which draw paints a region, compare the bounds; to see a texture, decode it with `ge::decode_texture` in a throwaway patch. (Upstream P3P's first battle route needed a maintainer save in its profile's `input/local/`.)
 
 Profile the shipped configuration, not the diagnostic one: configure `build/prod` with `-DP3P_PRODUCTION_RUNTIME=ON "-DP3P_AOT_OPT=-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2"` (no events, no census, like the 3DS build), build `p3p_pc_bootstrap`, then run a scripted route with `--render-from 9999999 --sample .tmp/prof/s.txt --sample-from <vblank>` and map it with `python tools/profile_symbols.py build/prod/p3p_pc_bootstrap.exe .tmp/prof/s.txt 40 --nm <mingw nm.exe>`. Compare host time of the same route (`[SAMPLE WINDOW]` line, whole-run wall time) before and after, and check the run ends at the same guest PC. To profile one scene only, end the run with `--stop-vblank <vblank>` and add `--profile`: with `--sample-from` it then covers just the window and lists the 12 HLE imports with the most time (`[PROFILE] import ...`). Frame index to vblank: `time_us` of the `frame` events of a `--dump-events` run divided by 16,683 (first battle: Evoker ≈ vblank 21,000, battle end ≈ 32,000). Per-NID call counts: environment `PSPRECOMP_HLE_HISTOGRAM=1`; run once to the window start and once to its end and subtract. Sample counts are not a time measure (Windows may ignore the 1 ms timer request). On the 3DS, the bottom-screen report splits the last 10 s into aot / hle / ge / present / idle.
 

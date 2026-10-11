@@ -33,8 +33,14 @@ set(P3P_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${P3P_GENERATED_DIR}")
 set(P3P_GENERATED_CPP "${P3P_GENERATED_DIR}/p3p_generated.cpp")
 
+# Game profile: every game-specific path, address and layout comes from here.
+set(P3P_PROFILE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p1p" CACHE PATH "Game profile directory (config/, game/)")
+get_filename_component(P3P_PROFILE_DIR "${P3P_PROFILE_DIR}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+include("${P3P_PROFILE_DIR}/config/profile.cmake")
+file(RELATIVE_PATH P3P_PROFILE_REL "${CMAKE_CURRENT_SOURCE_DIR}" "${P3P_PROFILE_DIR}")
+
 # Generation command using psp_recomp
-set(P3P_ELF "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/game/eboot.elf")
+set(P3P_ELF "${P3P_PROFILE_DIR}/game/eboot.elf")
 # The decrypted EBOOT is local (tools/prepare_game.py). Without it (CI, a fresh
 # clone) everything made from the game is left out: the AOT units, the PC
 # runner and the tests that execute game code. The runtime, the tools, the
@@ -45,19 +51,24 @@ else()
     set(P3P_HAVE_GAME OFF)
     message(STATUS "No ${P3P_ELF}: building without the game-derived targets")
 endif()
-set(P3P_FUNCTIONS_CSV "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/config/p3p_functions.csv")
+set(P3P_FUNCTIONS_CSV "${P3P_PROFILE_FUNCTIONS_CSV}")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
-set(P3P_FRONTIER_CSV "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/config/frontier_seeds.csv" CACHE FILEPATH
+set(P3P_FRONTIER_CSV "${P3P_PROFILE_DIR}/config/frontier_seeds.csv" CACHE FILEPATH
     "Managed frontier seed manifest merged into MANUAL-mode generation")
 set(P3P_MERGED_CSV "${P3P_GENERATED_DIR}/frontier_functions.csv")
 
 # AUTO: whole-.text generation from psp_analyze's global CFG, split into
-# fixed-span translation units (profiles/p3p/config/aot_layout.cmake).
+# fixed-span translation units (${P3P_PROFILE_DIR}/config/aot_layout.cmake).
 # MANUAL: legacy seed-manifest generation used by tools/chase_frontier.py.
 set(P3P_AOT_MODE "AUTO" CACHE STRING "AOT generation mode: AUTO or MANUAL")
 set_property(CACHE P3P_AOT_MODE PROPERTY STRINGS AUTO MANUAL)
 set(P3P_AOT_OPT "-O2" CACHE STRING "Optimization flag for generated AOT units (GCC/Clang)")
-include("${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/config/aot_layout.cmake")
+include("${P3P_PROFILE_DIR}/config/aot_layout.cmake")
+if(P3P_HAVE_GAME AND P3P_AOT_MODE STREQUAL "AUTO" AND NOT P3P_AOT_UNIT_COUNT)
+    message(FATAL_ERROR "P3P_AOT_UNIT_COUNT is not set in ${P3P_PROFILE_DIR}/config/aot_layout.cmake. "
+        "Measure it with: <host build>/recomp/PSPRecomp/psp_recomp ${P3P_ELF} --auto .tmp/auto "
+        "${P3P_AOT_LOAD_BASE} ${P3P_AOT_UNIT_SPAN} (it prints the translation unit count), set it, then configure again.")
+endif()
 
 if(NOT P3P_HAVE_GAME)
     # No generated code without the EBOOT.
@@ -71,8 +82,15 @@ elseif(P3P_AOT_MODE STREQUAL "AUTO")
         set(P3P_RECOMP_FLAGS "--no-transfer-records")
     endif()
     # Community CWCheat codes applied to the EBOOT before generation and load.
-    set(P3P_CWCHEAT_INI "${CMAKE_CURRENT_SOURCE_DIR}/p3p/p3p-patches/ULUS10512.ini")
-    set(P3P_CWCHEAT_SELECTION "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/config/cwcheat_patches.txt")
+    # Optional: without a profile .ini the patch list is empty ("none").
+    set(P3P_CWCHEAT_SELECTION "${P3P_PROFILE_DIR}/config/cwcheat_patches.txt")
+    if(P3P_PROFILE_CWCHEAT_INI)
+        set(P3P_CWCHEAT_INI "${P3P_PROFILE_CWCHEAT_INI}")
+        set(P3P_CWCHEAT_DEPENDS "${P3P_CWCHEAT_INI}" "${P3P_CWCHEAT_SELECTION}")
+    else()
+        set(P3P_CWCHEAT_INI "none")
+        set(P3P_CWCHEAT_DEPENDS "${P3P_CWCHEAT_SELECTION}")
+    endif()
     set(P3P_PATCH_LIST "${P3P_GENERATED_DIR}/patches.txt")
     set(P3P_AUTO_SOURCES "${P3P_AUTO_DIR}/generated_registry.cpp")
     math(EXPR _p3p_last_unit "${P3P_AOT_UNIT_COUNT} - 1")
@@ -87,9 +105,9 @@ elseif(P3P_AOT_MODE STREQUAL "AUTO")
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/cwcheat_patches.py" "${P3P_CWCHEAT_INI}" "${P3P_CWCHEAT_SELECTION}" "${P3P_PATCH_LIST}"
         COMMAND psp_recomp "${P3P_ELF}" --auto "${P3P_AUTO_DIR}" "${P3P_AOT_LOAD_BASE}" "${P3P_AOT_UNIT_SPAN}" "${P3P_PATCH_LIST}" ${P3P_RECOMP_FLAGS}
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_aot_layout.py" "${P3P_AUTO_DIR}" "${P3P_AOT_UNIT_COUNT}" "${P3P_AOT_UNIT_SPAN}"
-        DEPENDS psp_recomp "${P3P_ELF}" "${CMAKE_CURRENT_SOURCE_DIR}/profiles/p3p/config/aot_layout.cmake"
+        DEPENDS psp_recomp "${P3P_ELF}" "${P3P_PROFILE_DIR}/config/aot_layout.cmake"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_aot_layout.py" "${CMAKE_CURRENT_SOURCE_DIR}/tools/cwcheat_patches.py"
-                "${P3P_CWCHEAT_INI}" "${P3P_CWCHEAT_SELECTION}"
+                ${P3P_CWCHEAT_DEPENDS}
         COMMENT "Generating whole-.text P3P AOT units (${P3P_AOT_UNIT_COUNT} x ${P3P_AOT_UNIT_SPAN} bytes)..."
         VERBATIM
     )
@@ -137,13 +155,28 @@ endif()
 if(P3P_HAVE_GAME)
 add_executable(p3p_pc_bootstrap
     platform/pc/main.cpp
+    platform/pc/fork_avcodec.cpp # Persona3DS fork: converted movies
     ${P3P_AOT_RUNNER_SOURCES}
 )
+# Persona3DS fork: optional libavcodec (the user's ffmpeg) to decode converted movies on PC.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(P3P_AVCODEC QUIET IMPORTED_TARGET libavcodec libavutil)
+endif()
+if(P3P_AVCODEC_FOUND)
+    target_link_libraries(p3p_pc_bootstrap PRIVATE PkgConfig::P3P_AVCODEC)
+    target_compile_definitions(p3p_pc_bootstrap PRIVATE P3P_HAVE_AVCODEC=1)
+    message(STATUS "Converted movies on PC: libavcodec ${P3P_AVCODEC_libavcodec_VERSION}")
+else()
+    message(STATUS "Converted movies on PC: libavcodec not found (pkg-config), movies stay black")
+endif()
 
 target_include_directories(p3p_pc_bootstrap PRIVATE
     core/include
     recomp/PSPRecomp/include
+    "${P3P_PROFILE_DIR}/config"
 )
+target_compile_definitions(p3p_pc_bootstrap PRIVATE P3P_DEFAULT_ELF="${P3P_PROFILE_REL}/game/eboot.elf")
 
 target_link_libraries(p3p_pc_bootstrap PRIVATE
     ${P3P_AOT_LINK}
@@ -237,7 +270,7 @@ set_tests_properties(p3p_hle_threadman PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-if(P3P_HAVE_GAME)
+if(P3P_HAVE_GAME AND P3P_PROFILE_BOOTSTRAP_VERIFIED)
 add_test(
     NAME p3p_pc_bootstrap_smoke
     COMMAND p3p_pc_bootstrap --verify-bootstrap --max-dispatches 100000
@@ -245,6 +278,8 @@ add_test(
 set_tests_properties(p3p_pc_bootstrap_smoke PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
+endif()
+if(P3P_HAVE_GAME)
 
 add_test(
     NAME p3p_decoder_compatibility
@@ -290,8 +325,10 @@ add_executable(p3p_frontier_check platform/pc/frontier_check.cpp)
 target_link_libraries(p3p_frontier_check PRIVATE p3p3ds_core)
 add_executable(test_frontier tests/test_frontier.cpp)
 target_link_libraries(test_frontier PRIVATE p3p3ds_core)
+target_include_directories(test_frontier PRIVATE "${P3P_PROFILE_DIR}/config")
 add_test(NAME p3p_frontier_safety COMMAND test_frontier)
 add_test(NAME p3p_frontier_workflow COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_chase_frontier.py")
+add_test(NAME p3p_convert_media COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_convert_media.py")
 
 # Interpreter vs AOT differential test (needs the local ELF).
 if(P3P_HAVE_GAME AND P3P_AOT_MODE STREQUAL "AUTO")
@@ -301,6 +338,25 @@ if(P3P_HAVE_GAME AND P3P_AOT_MODE STREQUAL "AUTO")
     set_tests_properties(p3p_interpreter_differential PROPERTIES
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" SKIP_RETURN_CODE 77)
 endif()
+
+# Persona3DS fork: kernel imports in core/src/hle/fork_kernel.cpp.
+add_executable(test_fork_kernel tests/test_fork_kernel.cpp)
+target_link_libraries(test_fork_kernel PRIVATE p3p3ds_core)
+target_compile_definitions(test_fork_kernel PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME p3p_fork_kernel COMMAND test_fork_kernel)
+add_executable(test_fork_atrac tests/test_fork_atrac.cpp)
+target_link_libraries(test_fork_atrac PRIVATE p3p3ds_core)
+target_compile_definitions(test_fork_atrac PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME p3p_fork_atrac COMMAND test_fork_atrac)
+set_tests_properties(p3p_fork_atrac PROPERTIES SKIP_RETURN_CODE 77)
+add_executable(test_fork_media tests/test_fork_media.cpp)
+target_link_libraries(test_fork_media PRIVATE p3p3ds_core)
+target_compile_definitions(test_fork_media PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME p3p_fork_media COMMAND test_fork_media)
+add_executable(test_fork_vfs tests/test_fork_vfs.cpp)
+target_link_libraries(test_fork_vfs PRIVATE p3p3ds_core)
+target_compile_definitions(test_fork_vfs PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME p3p_fork_vfs COMMAND test_fork_vfs)
 
 add_executable(test_threadman_sync tests/test_threadman_sync.cpp)
 target_link_libraries(test_threadman_sync PRIVATE p3p3ds_core)
@@ -324,7 +380,16 @@ target_link_libraries(test_ge_renderer PRIVATE p3p3ds_core)
 add_test(NAME p3p_ge_renderer COMMAND test_ge_renderer)
 # Builder (ISO -> .3dsx) pieces that run on the host and are unit-tested here.
 add_library(p3p3ds_builder_core STATIC platform/pc/builder/psp_eboot.cpp)
-target_include_directories(p3p3ds_builder_core PUBLIC platform/pc/builder)
+target_include_directories(p3p3ds_builder_core PUBLIC platform/pc/builder "${P3P_PROFILE_DIR}/config")
+# AOT layout of the selected profile (an empty unit count builds as 0: the
+# Builder refuses to generate until the profile is measured).
+if(P3P_AOT_UNIT_COUNT)
+    set(_p3p_builder_units "${P3P_AOT_UNIT_COUNT}")
+else()
+    set(_p3p_builder_units 0)
+endif()
+target_compile_definitions(p3p3ds_builder_core PUBLIC P3P_AOT_UNIT_COUNT=${_p3p_builder_units}
+    P3P_AOT_LOAD_BASE="${P3P_AOT_LOAD_BASE}" P3P_AOT_UNIT_SPAN="${P3P_AOT_UNIT_SPAN}")
 if(WIN32)
     enable_language(RC)
     add_executable(p3p3ds_builder WIN32 platform/pc/builder/builder_main.cpp platform/pc/builder/pipeline.cpp platform/pc/builder/builder.rc)

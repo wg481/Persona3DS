@@ -5,6 +5,8 @@ selection.txt: one code title per line ("_C" name), '#' comments.
 Only constant writes are supported: 0x0 (8-bit), 0x1 (16-bit), 0x2 (32-bit);
 addresses are relative to 0x08800000 as in CWCheat. Output lines:
 "<address> <value> <width>" in hex. Standard library only.
+<cheats.ini> may be "none" (the profile has no CWCheat list): the selection
+must then name no code, and the output is an empty patch list.
 """
 import sys
 from pathlib import Path
@@ -29,8 +31,14 @@ def main(argv):
     if len(argv) != 3:
         print(__doc__, file=sys.stderr)
         return 2
-    codes = parse(Path(argv[0]).read_text(encoding="utf-8", errors="replace"))
     wanted = [l.split("#")[0].strip() for l in Path(argv[1]).read_text(encoding="utf-8").splitlines()]
+    if argv[0] == "none":
+        if any(wanted):
+            print("codes selected but the profile has no CWCheat .ini", file=sys.stderr)
+            return 1
+        codes = {}
+    else:
+        codes = parse(Path(argv[0]).read_text(encoding="utf-8", errors="replace"))
     out = []
     for name in filter(None, wanted):
         if name not in codes:

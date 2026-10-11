@@ -1,0 +1,3 @@
+name,address,size
+module_start,0x08804114,cfg
+user_main,0x08804228,cfg

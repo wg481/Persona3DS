@@ -25,6 +25,11 @@ set(P3P3DS_CORE_SOURCES
     core/src/hle/ge.cpp
     core/src/hle/umd.cpp
     core/src/hle/audio.cpp
+    core/src/hle/fork_kernel.cpp # Persona3DS fork
+    core/src/hle/fork_atrac.cpp # Persona3DS fork
+    core/src/hle/fork_media.cpp # Persona3DS fork
+    core/src/hle/fork_movie.cpp # Persona3DS fork
+    core/src/fork_vfs.cpp # Persona3DS fork
 )
 
 # PSPRecomp runtime sources needed at run time (no host-only tools).

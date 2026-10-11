@@ -1,7 +1,7 @@
 #pragma once
 #include "psprecomp/runtime.hpp"
 #include "p3p3ds/kernel_state.hpp"
-#include "../../profiles/p3p/config/bootstrap_expectations.hpp"
+#include "bootstrap_expectations.hpp" // <P3P_PROFILE_DIR>/config
 #include <fstream>
 #include <iomanip>
 #include <optional>

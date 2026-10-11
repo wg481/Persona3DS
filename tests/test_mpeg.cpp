@@ -149,7 +149,9 @@ std::vector<std::string> run_basic(const std::vector<std::uint8_t> &pmf) {
         free_packets = env.call(0xB5F6DC87u, {kRingbuffer});
         out.push_back(fmt("  sceMpegRingbufferAvailableSize: %d", free_packets));
         auto res = env.call(0xE1CE83A7u, {kMpegPtr, atrac_stream, kAtracAu, kAbuf});
-        out.push_back(fmt("  sceMpegGetAtracAu: %08x (at %08x)", res, m.load32(kAbuf)));
+        // P3P3DS: on failure the address is not reported (see expected_lines).
+        out.push_back(res == 0u ? fmt("  sceMpegGetAtracAu: %08x (at %08x)", res, m.load32(kAbuf))
+                                : fmt("  sceMpegGetAtracAu: %08x", res));
         au_line(kAtracAu, "ATRAC");
         out.push_back(fmt("  sceMpegAtracDecode: %08x", env.call(0x800C44DFu, {kMpegPtr, kAtracAu, m.load32(kAbuf), 1u})));
         au_line(kAtracAu, "ATRAC");
@@ -176,6 +178,12 @@ std::vector<std::string> expected_lines(const std::string &path) {
         // The ATRAC buffer address is specific to the original test's heap.
         if (const auto at = line.find(" from "); at != std::string::npos && line.find("GetAtracAu") != std::string::npos)
             line = line.substr(0, at) + ")";
+        // P3P3DS: basic.c prints its uninitialized local `void *abuffer` after
+        // a failed sceMpegGetAtracAu (basic.c:10, :28-29): stack contents of
+        // that build of basic.prx (0 before pspautotests d66aeae, 0x00040800
+        // after), not something the firmware wrote. Compare only the result.
+        if (line.rfind("  sceMpegGetAtracAu: ", 0) == 0 && line.find(": 00000000") == std::string::npos)
+            if (const auto at = line.find(" (at "); at != std::string::npos) line = line.substr(0, at);
         lines.push_back(line);
     }
     return lines;

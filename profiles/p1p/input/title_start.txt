@@ -1,0 +1,5 @@
+# Template: vblank-keyed controller script for the runners (--input, format in
+# core/include/p3p3ds/input.hpp): "<vblank> <buttons> [<duration>]".
+# TODO: measure the vblank at which Persona's title screen accepts input, then
+# uncomment and adjust, e.g.:
+# 0000 START 6

@@ -167,5 +167,5 @@ jobs:
             gh release upload "$REF" dist/* --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$REF" dist/* --repo "$GITHUB_REPOSITORY" --title "P3P3DS Builder ${{ needs.check.outputs.version }}" \
-              --notes "Builds P3P3DS from your own Persona 3 Portable (ULUS-10512) ISO: Windows (zip) and Linux x86-64 (tar.gz). See README.md for the current state of the port."
+              --notes "Builds Persona3DS from your own Shin Megami Tensei: Persona (ULUS-10432) ISO: Windows (zip) and Linux x86-64 (tar.gz). See README.md for the current state of the port."
           fi

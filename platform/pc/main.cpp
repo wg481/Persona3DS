@@ -4,6 +4,11 @@
 #include "p3p3ds/interpreter.hpp"
 #include "p3p3ds/vfs.hpp"
 #include "telemetry.hpp"
+#include "profile_info.hpp"
+#include "p3p3ds/fork_vfs.hpp"
+#include "p3p3ds/hle/fork_media.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
+namespace p3p3ds::pc { bool install_movie_decoder(); } // fork_avcodec.cpp
 #include "frame_dump.hpp"
 #include "pcm_mixer.hpp"
 #include "host_input.hpp"
@@ -26,7 +31,7 @@
 namespace psprecomp {void register_generated_functions(Runtime &); void apply_generated_patches(GuestMemory &);}
 int main(int argc,char **argv) {
     try {
-        std::filesystem::path elf_path="profiles/p3p/game/eboot.elf", events_path, umd_path, io_trace_path,
+        std::filesystem::path elf_path=P3P_DEFAULT_ELF, events_path, umd_path, io_trace_path,
             ms0_path="out/ms0", mods_path, frames_dir, wav_path, input_path, sample_path, draw_log_path;
         std::string savedata_policy="latest";
         std::uint64_t frame_every=30, render_from=0, sample_from=0, draw_log_from=0, stop_vblank=0;
@@ -87,7 +92,7 @@ int main(int argc,char **argv) {
         psprecomp::Runtime rt;
         const auto reloc=elf.load_and_relocate(rt.memory());
         // Profile CWCheat patches baked into the generated AOT (see
-        // profiles/p3p/config/cwcheat_patches.txt) must also patch the image.
+        // <P3P_PROFILE_DIR>/config/cwcheat_patches.txt) must also patch the image.
         psprecomp::apply_generated_patches(rt.memory());
         const auto module=elf.find_module_info(rt.memory());
         if(!module)throw std::runtime_error("missing module info");
@@ -108,13 +113,13 @@ int main(int argc,char **argv) {
         }
         if(!umd_path.empty()) {
             auto umd=std::make_shared<p3p3ds::vfs::IsoFileSystem>(umd_path);
-            kernel.io().mount("disc0:",umd);
+            kernel.io().mount("disc0:",std::make_shared<p3p3ds::vfs::LbnIsoFileSystem>(umd,umd_path)); // + disc0:/sce_lbn (fork)
             std::cout<<"UMD image: "<<umd_path.filename().string()<<" files="<<umd->file_count()<<"\n";
         } else std::cout<<"UMD image: none (disc0: unmounted)\n";
         kernel.io().trace_reads=!io_trace_path.empty();
         {
-            // ms0: memory stick root; the community Mod Support patch reads
-            // ms0:/PSP/P3P/{bind/,mod.cpk,mod1-3.cpk}, mapped onto --mods.
+            // ms0: memory stick root; --mods is mapped onto the profile's
+            // mods folder (profile_info.hpp mods_alias; P3P: ms0:/PSP/P3P).
             std::filesystem::create_directories(ms0_path);
             kernel.io().mount("ms0:",std::make_shared<p3p3ds::vfs::HostFileSystem>(ms0_path),true);
             // Saves: ms0:/PSP/SAVEDATA. The list dialogs have no window here, so
@@ -129,10 +134,18 @@ int main(int argc,char **argv) {
                     if(d.slots[i].exists && (best<0 || d.slots[i].modified>d.slots[best].modified)) best=i;
                 return best>=0 ? best : (d.kind==p3p3ds::hle::SavedataDialog::Kind::Save ? 0 : -1);
             };
-            if(!mods_path.empty()) {
-                kernel.io().alias("ms0:/PSP/P3P",std::make_shared<p3p3ds::vfs::HostFileSystem>(mods_path,true)); // read-only: cached lookups
-                std::cout<<"Mods: ms0:/PSP/P3P -> "<<mods_path.string()<<"\n";
+            if(!mods_path.empty() && *p3p3ds::profile::mods_alias=='\0') {
+                std::cout<<"Mods: the profile has no mods folder, --mods ignored\n";
+            } else if(!mods_path.empty()) {
+                kernel.io().alias(p3p3ds::profile::mods_alias,std::make_shared<p3p3ds::vfs::HostFileSystem>(mods_path,true)); // read-only: cached lookups
+                std::cout<<"Mods: "<<p3p3ds::profile::mods_alias<<" -> "<<mods_path.string()<<"\n";
             }
+            // Persona3DS: converted music next to the game data (tools/convert_media.py).
+            auto &media=p3p3ds::hle::media::fork_media();
+            media.set_dir((elf_path.parent_path()/"media").string());
+            if(media.stats().entries) std::cout<<"Media: "<<media.stats().entries<<" converted tracks in "<<media.dir()<<"\n";
+            if(const auto movies=p3p3ds::hle::media::fork_movies().stats().entries)
+                std::cout<<"Media: "<<movies<<" converted movies, "<<(p3p3ds::pc::install_movie_decoder()?"decoded with libavcodec":"no decoder (built without libavcodec): black pictures")<<"\n";
         }
         kernel.threads().init_root_thread("root",entry,sp,module->gp);
         {

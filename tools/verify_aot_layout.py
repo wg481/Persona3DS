@@ -26,7 +26,7 @@ def main(argv):
     if extra := sorted(present - expected):
         errors.append(f"unexpected units: {extra[:5]}")
     if errors:
-        print("AOT layout mismatch (update profiles/p3p/config/aot_layout.cmake after review): "
+        print("AOT layout mismatch (update <P3P_PROFILE_DIR>/config/aot_layout.cmake after review): "
               + "; ".join(errors), file=sys.stderr)
         return 1
     return 0
