@@ -7,9 +7,9 @@ All the engineering (the static recompiler, the PSP HLE runtime, the GE-to-PICA2
 ## Status: does not boot yet
 
 - [VERIFIED] The host runtime, tools, Builder and tests build and pass without game data (Linux, GCC 13; `ctest` 24/24 with 3 skipped tests that need game data or reference clones).
-- [UNVERIFIED] Nothing has been run on Persona's executable yet. Its load base, RAM size, SDK version, entry point, EBOOT checksums and AOT unit count are placeholders (`TODO`) in [`profiles/p1p/`](profiles/p1p/README.md) until the EBOOT is decrypted and measured.
-- [UNVERIFIED] The built-in EBOOT decryptor only knows the encryption tag P3P uses (`0xD91613F0`). If Persona's EBOOT uses another tag, decrypt it with another tool (e.g. PPSSPP's decrypted EBOOT dump) and pass it with `--decrypted-eboot`.
-- [UNVERIFIED] Which PSP services Persona imports beyond those P3P needed is unknown; the first PC run will stop at the first missing one.
+- [VERIFIED] (maintainer's PC, 2026-10-11) The PPSSPP-decrypted EBOOT generates 153 AOT units, the PC runner builds and starts at `0x08804114`, and stops at the first SDK call in module start: `SysMemUserForUser::0x91DE343C` (`sceKernelSetCompiledSdkVersion500_550`). 42 of the game's 193 imports have no HLE yet. Details and the current frontier: [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
+- [VERIFIED] Persona's EBOOT uses encryption tag `0xD9160BF0`, which the built-in decryptor does not support (it knows P3P's `0xD91613F0`). Decrypt it with PPSSPP's decrypted EBOOT dump and pass it with `--decrypted-eboot`. The Builder cannot build this game yet.
+- Measured values and remaining placeholders (`TODO`): [`profiles/p1p/README.md`](profiles/p1p/README.md).
 
 The verified frontier and its history are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) (the older entries describe upstream's P3P work).
 
@@ -36,16 +36,16 @@ cmake -S platform/3ds -B build/3ds ... -DP3P_PROFILE_DIR=profiles/p1p   # same v
 
 - CMake 3.20+, Ninja, a C++20 compiler (built here with GCC 13; upstream CI uses GCC 14), Python 3.11+ (standard library only; `tomllib`).
 - For the New 3DS build: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS packages.
-- Your own *Shin Megami Tensei: Persona* `ULUS-10432` ISO. Reported ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` (third-party listing, [UNVERIFIED]; `prepare_game.py` prints the measured value).
+- Your own *Shin Megami Tensei: Persona* `ULUS-10432` ISO. ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` ([VERIFIED] on the maintainer's copy).
 
 ## Game setup
 
 ```bash
-python tools/prepare_game.py "<your Persona ISO>" --check-only
-python tools/prepare_game.py "<your Persona ISO>"
+python tools/prepare_game.py "<your Persona ISO>" --decrypted-eboot <PPSSPP dump> --check-only
+python tools/prepare_game.py "<your Persona ISO>" --decrypted-eboot <PPSSPP dump>
 ```
 
-It checks `PARAM.SFO` (`ULUS10432`), decrypts `EBOOT.BIN` to `profiles/p1p/game/eboot.elf` and extracts `USRDIR/`. While the profile's checksums are placeholders it prints the measured hashes and continues with a warning; paste them into the profile once confirmed. Game files never enter the repository.
+It checks `PARAM.SFO` (`ULUS10432`) and the ISO MD5, verifies the decrypted EBOOT against the profile's SHA-256 (of PPSSPP's dump), writes it to `profiles/p1p/game/eboot.elf` and extracts `USRDIR/`. Game files never enter the repository.
 
 ## Build
 
@@ -55,7 +55,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Without `profiles/p1p/game/eboot.elf` both CMake projects build everything that does not come from the game (runtime, tools, Builder, tests). With the EBOOT present, configuring stops until `P3P_AOT_UNIT_COUNT` is set in `aot_layout.cmake`; the error message prints the `psp_recomp --auto` command that measures it.
+Without `profiles/p1p/game/eboot.elf` both CMake projects build everything that does not come from the game (runtime, tools, Builder, tests). With the EBOOT present the AOT units are generated as well; `P3P_AOT_UNIT_COUNT` in `aot_layout.cmake` (153 for Persona) must match what `psp_recomp --auto` produces, and configuring stops with the measuring command when a profile has none.
 
 New 3DS (devkitPro msys2 shell, after the host build):
 

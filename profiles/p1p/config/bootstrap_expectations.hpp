@@ -1,11 +1,11 @@
 #pragma once
 #include <cstdint>
 namespace p3p3ds::profile {
-// Persona (ULUS-10432). TODO: every 0 below is a placeholder until the
-// decrypted EBOOT is measured on the PC runner (docs/CURRENT_STATE.md); the
-// --verify-bootstrap smoke test stays unregistered until then
-// (P3P_PROFILE_BOOTSTRAP_VERIFIED in profile.cmake).
-inline constexpr std::uint32_t entry=0 /*TODO*/, user_main=0 /*TODO*/;
+// Persona (ULUS-10432). TODO: every 0 below is a placeholder until measured
+// on the PC runner (docs/CURRENT_STATE.md); the --verify-bootstrap smoke test
+// stays unregistered until then (P3P_PROFILE_BOOTSTRAP_VERIFIED in profile.cmake).
+// [VERIFIED] entry: PC runner "entry=0x08804114" (maintainer, 2026-10-11).
+inline constexpr std::uint32_t entry=0x08804114, user_main=0 /*TODO*/;
 inline constexpr std::uint32_t sdk=0 /*TODO*/, compiler=0 /*TODO*/;
 // A completed guest return used by the bootstrap checkpoint. TODO.
 inline constexpr std::uint32_t return_site=0 /*TODO*/, return_target=0 /*TODO*/;

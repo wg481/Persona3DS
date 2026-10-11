@@ -1,25 +1,36 @@
 # Shin Megami Tensei: Persona (PSP remake), North American release.
-# Every value marked TODO is unknown until the EBOOT is decrypted and measured
-# on the maintainer's machine; never fill one from memory or a guess.
+# Every value marked TODO is unknown until measured on the maintainer's
+# machine; never fill one from memory or a guess. Measured values cite their
+# source (maintainer measurements of 2026-10-11, docs/CURRENT_STATE.md).
 
 [game]
 name = "Shin Megami Tensei: Persona"
-disc_id = "ULUS10432"             # PARAM.SFO DISC_ID [UNVERIFIED until read from the ISO]
+disc_id = "ULUS10432"             # PARAM.SFO DISC_ID [VERIFIED] maintainer's ISO
 disc_id_display = "ULUS-10432"
 region = "NTSC-U"
 release_date = "2009-09-22"       # [UNVERIFIED] public release listings
 module = "p1p"
-ram_mb = "TODO"                   # TODO: measure (psp_analyze report / PARAM.SFO)
-load_base = "TODO"                # TODO: measure; aot_layout.cmake assumes 0x08804000 [INFERRED]
-sdk_version = "TODO"              # TODO: sceKernelSetCompiledSdkVersion argument
-entry_point = "TODO"              # TODO: ELF runtime entry after relocation
+ram_mb = "TODO"                   # TODO: measure (PARAM.SFO MEMSIZE)
+# [INFERRED] The EBOOT is a relocatable PRX (ELF type 0xFFA0, readelf -l); the
+# runners load it at the PSP user default. Not measured on hardware.
+load_base = "0x08804000"
+sdk_version = "TODO"              # TODO: $a0 of sceKernelSetCompiledSdkVersion500_550 (runner event log)
+# [VERIFIED] ELF e_entry 0x114 (readelf); PC runner "entry=0x08804114" at load_base.
+entry_point = "0x08804114"
+module_name = "pspsys"            # [VERIFIED] psp_analyze module info
+# [VERIFIED] EBOOT.BIN ~PSP tag (prepare_game.py rejection). Not supported by
+# the built-in decryptor (only 0xD91613F0): use --decrypted-eboot.
+eboot_tag = "0xD9160BF0"
 
 [checksums]
 # "TODO" = placeholder: tools/prepare_game.py prints the measured value and
 # continues with a warning. Paste the measured values here once confirmed.
-iso_md5 = "c75f75b0f1e92d7cca77d75585bebd82"   # [UNVERIFIED] third-party listing, not checked here
-encrypted_eboot_sha256 = "TODO"
-decrypted_elf_sha256 = "TODO"
+iso_md5 = "c75f75b0f1e92d7cca77d75585bebd82"   # [VERIFIED] maintainer's ISO matched (prepare_game.py)
+# [VERIFIED] maintainer's ISO, PSP_GAME/SYSDIR/EBOOT.BIN.
+encrypted_eboot_sha256 = "30990909958a3b6e4c09872abb5626e4c130a3b3e8e84f4bef809465dfa629de"
+# [VERIFIED] of PPSSPP's "dump decrypted EBOOT" output, passed with
+# --decrypted-eboot. Another decryptor may produce different bytes.
+decrypted_elf_sha256 = "60c050e36bd874ad0b16e794002c7bcafd6ae833c12922c28520a6fa30121a1b"
 
 [runtime]
 sd_folder = "persona3ds"          # sdmc:/persona3ds on the 3DS (profile_info.hpp)

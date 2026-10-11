@@ -2,6 +2,21 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona: first PC run, measured profile (2026-10-11)
+
+All measurements by the maintainer on their own ULUS-10432 copy (Windows, MSYS2 UCRT64, GCC 16.1); this session had no game data and recorded them in `profiles/p1p/`.
+
+- [VERIFIED] ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` (matches the third-party listing). Encrypted `EBOOT.BIN` SHA-256 `30990909958a3b6e4c09872abb5626e4c130a3b3e8e84f4bef809465dfa629de`.
+- [VERIFIED] EBOOT tag `0xD9160BF0` (P3P: `0xD91613F0`): `prepare_game.py`'s decryptor rejects it. The EBOOT was decrypted with PPSSPP's "dump decrypted EBOOT" and passed with `--decrypted-eboot`; SHA-256 of that dump `60c050e36bd874ad0b16e794002c7bcafd6ae833c12922c28520a6fa30121a1b` (now the profile's reference; another decryptor may give different bytes).
+- [VERIFIED] `readelf -l`: ELF type `0xFFA0` (relocatable PRX), `e_entry` `0x114`; LOAD 1 vaddr 0 filesz/memsz `0x2634b0` (code, stubs, rodata), LOAD 2 vaddr `0x2634c0` filesz `0x8e2d4` memsz `0x2b138c` (data, bss), relocation segment (`LOPROC+0xa0`) filesz `0xb6808`; image ends at module offset `0x51484C`. [INFERRED] load base `0x08804000` (loader's choice for a PRX; runner entry `0x08804114` = base + `0x114`).
+- [VERIFIED] `psp_analyze` / `psp_recomp --auto` at `0x08804000`, span 16384: module `pspsys`, 93,441 relocations (0 invalid, 0 unsupported), 193 imports, 6,211 function seeds, 483,724 emitted PCs, 88,312 blocks, 2,153 indirect call sites, 153 translation units. With `P3P_AOT_UNIT_COUNT 153` the full host build succeeds (PC runner built).
+- [VERIFIED] 42 of 193 imports have no HLE in `core/` (`tools/name_imports.py`, 187/193 resolved). Kernel-side names checked against uOFW `exports.exp` / PSPSDK stubs in this session: InterruptManager `sceKernelRegisterSubIntrHandler` / `sceKernelReleaseSubIntrHandler` / `sceKernelEnableSubIntr`; IoFileMgrForUser `sceIoRename`; LoadExecForUser `sceKernelExitGame`; ModuleMgrForUser `sceKernelUnloadModule` / `sceKernelStopModule` / `sceKernelGetModuleId` / `sceKernelStopUnloadSelfModuleWithStatus`; SysMemUserForUser `sceKernelSetCompiledSdkVersion500_550`; ThreadManForUser `sceKernelTerminateDeleteThread` / `sceKernelReferEventFlagStatus`; `sceDisplayIsVblank`; `scePowerRegisterCallback`; `sceRtcGetTick` / `sceRtcGetCurrentClockLocalTime`; sceUmdUser `sceUmdWaitDriveStatCB` / `sceUmdCancelWaitDriveStat` / `sceUmdDeactivate`. The rest are sceUtility MsgDialog (4), sceMpeg AVC/YCbCr (5) and sceAtrac3plus (14).
+- [VERIFIED] First PC run (`--umd <iso> --run-until-blocker --max-dispatches 1000000`): `entry=0x08804114 relocations=93441 registered_entries=88508`, stop `Missing HLE import SysMemUserForUser::0x91DE343C` at `0x08980F6C`, reached from `0x08804140` (`jal`, word `0x0E2603DB`); no interpreter entries, no audio, no GE/VRAM activity. Stable bootstrap FAIL is expected (checkpoint values are placeholders).
+- [VERIFIED] Maintainer's Windows CTest 25/26: `p3p_mpeg` failed, `p3p_modulemgr` skipped (see the next entry for `p3p_mpeg`).
+- Profile now holds these values; still `TODO`: `ram_mb`, `sdk_version`, `user_main` and the other bootstrap checkpoint values.
+
+Immediate blocker: `SysMemUserForUser::0x91DE343C` (`sceKernelSetCompiledSdkVersion500_550`).
+
 ## Persona 1 (ULUS-10432) retarget (2026-10-11)
 
 The fork now targets *Shin Megami Tensei: Persona* (PSP, ULUS-10432, released 2009-09-22 [UNVERIFIED]). No Persona code has run yet: this entry records the repository change only.
