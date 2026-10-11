@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 16 and New 3DS run 6; blocker 13: sceMpegAvcDecodeYCbCr (2026-10-11)
+
+- [VERIFIED] Blocker 12 is cleared on both targets. PC run 16 (maintainer, `162e4733`, CTest 28/28 on Windows): 1,962 frames; the vblank sub-interrupt handler `0x0881203C` ran 90 times as guest calls on `user_main` (`vblank_subintr` / `guest_call` / `guest_call_return` events, first evidence that blocker 9's dispatch works in the game); `readThread` filled the ringbuffer 45 times (`mpeg_ringbuffer_put`, 32 packets per call through the guest callback); 3,034 audio buffers. New 3DS run 6: 703 frames, 58.9 fps, 99 % of real time in the last 10 s, heap in use 55,800 KiB (+4,260 KiB, [INFERRED] the movie buffers), no failed allocation.
+- [VERIFIED] Both stop at the missing import `sceMpeg::0xF0EB1125` (`sceMpegAvcDecodeYCbCr`, stub `0x089812C4`), called by `user_main` from `0x08813DB8`: `$a0 = $s0` (the SceMpeg pointer), `$a1 = *($s2 + 4)` (the AVC AU), `$a2 = $t1 + 0x25EC` with one of the YCbCr buffers stored there in the delay slot, `$a3 = $sp` (*init). A non-zero result loops back (`bne $v0, $zero` at `0x08813DC0`).
+- Implementation in `core/src/hle/fork_kernel.cpp`, on the instance upstream's `sceMpegCreate` made (`KernelState::mpeg()`): the same decode pipeline as upstream's `sceMpegAvcDecode` ([VERIFIED] for that call by pspautotests `video/mpeg/basic.expected`; [INFERRED] for the YCbCr path, which has no hardware test): with a non-empty AU, the first decode after create/flush reports no picture and every later one reports 1; the AU size is cleared; return 0. No YCbCr pixels are written (the upstream decoder is a black placeholder); [INFERRED] the conversion call `sceMpegAvcCsc` will produce the black picture. Unknown handles and pointers outside guest memory stop and name the call.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: Persona's call on a created instance (no picture, then one, empty AU, decode count) and an unknown handle reported. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona. Expected next: `sceMpegAvcCsc` (YCbCr to RGB).
+
 ## Persona run 15 and New 3DS run 5; blocker 12: sceKernelReferEventFlagStatus (2026-10-11)
 
 - [VERIFIED] Blocker 11 is cleared on both targets: `sceMpegAvcInitYCbCr` returned 0 for every buffer. PC run 15 (maintainer, `d978e52d`, CTest 28/28 on Windows): the movie player starts three threads, `displayThread` (uid 18, entry `0x08813A78`, priority 65), `readThread` (uid 19, `0x0881329C`, 64) and `soundThread` (uid 20, `0x08813464`, 61). New 3DS run 5: 584 frames, 59.9 fps, 99 % of real time in the last 10 s.

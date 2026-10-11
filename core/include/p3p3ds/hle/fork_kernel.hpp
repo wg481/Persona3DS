@@ -176,6 +176,23 @@ struct MemoryStickInfo {
 // crashes a PSP) stop the run and name the call.
 [[nodiscard]] std::string describe_refer_event_flag(std::int32_t uid, std::uint32_t info, std::uint32_t size);
 
+// sceMpeg 0xF0EB1125 sceMpegAvcDecodeYCbCr(mpeg, au, buffer, init).
+// Persona (PC run 16, New 3DS run 6) calls it from 0x08813DB8 with the
+// SceMpeg pointer, its AVC AU, a pointer to a word holding one of the
+// sceMpegAvcInitYCbCr buffers (stored in the delay slot) and $sp as *init.
+// No hardware .expected exists for the YCbCr path. Modelled [INFERRED] like
+// upstream's sceMpegAvcDecode, whose pipeline is [VERIFIED] by
+// video/mpeg/basic.expected, on the same MpegInstance (KernelState::mpeg()):
+// with a non-empty AU the first decode after create/flush reports no picture
+// and every later one reports 1; the AU size is cleared; returns 0. The
+// decoder is the upstream placeholder, so no YCbCr pixels are written; the
+// conversion call (sceMpegAvcCsc) produces the black picture. PPSSPP
+// (read, not copied) instead writes *init = 1 for newer libraries; not
+// observed here. An unknown handle or an AU, buffer pointer or init outside
+// guest memory stops the run and names the call.
+[[nodiscard]] std::string describe_decode_ycbcr(std::uint32_t mpeg, std::uint32_t au, std::uint32_t buffer,
+                                                std::uint32_t init);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

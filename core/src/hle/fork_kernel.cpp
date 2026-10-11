@@ -1,6 +1,7 @@
 // See fork_kernel.hpp.
 #include "p3p3ds/hle/fork_kernel.hpp"
 
+#include "p3p3ds/hle/mpeg.hpp"
 #include "p3p3ds/kernel_state.hpp"
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
@@ -122,6 +123,11 @@ std::string describe_ycbcr_init(std::uint32_t mpeg, std::uint32_t mode, std::uin
 std::string describe_refer_event_flag(std::int32_t uid, std::uint32_t info, std::uint32_t size) {
     return "sceKernelReferEventFlagStatus(uid " + std::to_string(uid) + ", info " + psprecomp::hex32(info) + ", size " +
            std::to_string(size) + ") is not modelled yet";
+}
+
+std::string describe_decode_ycbcr(std::uint32_t mpeg, std::uint32_t au, std::uint32_t buffer, std::uint32_t init) {
+    return "sceMpegAvcDecodeYCbCr(mpeg " + psprecomp::hex32(mpeg) + ", au " + psprecomp::hex32(au) + ", buffer " +
+           psprecomp::hex32(buffer) + ", init " + psprecomp::hex32(init) + ") is not modelled yet";
 }
 
 namespace {
@@ -298,6 +304,26 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         m.store32(info + 40u, flag->init);
         m.store32(info + 44u, flag->bits);
         m.store32(info + 48u, static_cast<std::uint32_t>(flag->waiters.size()));
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceMpeg::0xF0EB1125 - sceMpegAvcDecodeYCbCr: sceMpegAvcDecode's pipeline, no pixels.
+    runtime.register_hle("sceMpeg", 0xF0EB1125u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t mpeg = ctx.gpr[4], au = ctx.gpr[5], buffer = ctx.gpr[6], init = ctx.gpr[7];
+        auto *inst = m.contains(mpeg, 4u) ? kernel.mpeg().find(m.load32(mpeg)) : nullptr;
+        if (inst == nullptr || !m.contains(au, 24u) || !m.contains(buffer, 4u) || !m.contains(init, 4u)) {
+            rt.stop(describe_decode_ycbcr(mpeg, au, buffer, init));
+            return;
+        }
+        std::uint32_t pictures = 0;
+        if (m.load32(au + hle::mpeg::AuSize) != 0u) {
+            if (inst->video_pipeline_primed) pictures = 1;
+            inst->video_pipeline_primed = true;
+            ++inst->video_decoded;
+        }
+        m.store32(au + hle::mpeg::AuSize, 0u);
+        m.store32(init, pictures);
         ctx.set_gpr(2, 0u);
     });
 

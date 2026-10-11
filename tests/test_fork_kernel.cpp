@@ -445,6 +445,37 @@ void test_refer_event_flag() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceKernelReferEventFlagStatus(uid " + std::to_string(flag) + ", info 0x09FEF800, size 8)") != std::string::npos);
 }
+
+// sceMpegAvcDecodeYCbCr on an instance made by upstream's sceMpegCreate, as
+// Persona calls it (run 16): first decode no picture, then one per AU.
+void test_mpeg_decode_ycbcr() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kMpeg = 0x08CC268Cu, kData = 0x08A00000u, kRb = 0x08CC26ECu, kAu = 0x08B00000u;
+    constexpr std::uint32_t kBufPtr = 0x08CC25ECu, kInit = 0x09FEF800u;
+    rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, kData); rt.cpu().set_gpr(6, 0x10000u); rt.cpu().set_gpr(7, kRb);
+    rt.invoke_import("sceMpeg", 0xD8C5F121u, rt.cpu()); // sceMpegCreate
+    CHECK(rt.cpu().gpr[2] == 0u);
+    m.store32(kBufPtr, 0x09000000u);
+    auto decode = [&](std::uint32_t au_size) {
+        m.store32(kAu + 20u, au_size);
+        m.store32(kInit, 0xDEADBEEFu);
+        rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, kAu); rt.cpu().set_gpr(6, kBufPtr); rt.cpu().set_gpr(7, kInit);
+        rt.invoke_import("sceMpeg", 0xF0EB1125u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(decode(0x1234u) == 0u && m.load32(kInit) == 0u && m.load32(kAu + 20u) == 0u); // pipeline delay
+    CHECK(decode(0x1234u) == 0u && m.load32(kInit) == 1u && m.load32(kAu + 20u) == 0u);
+    CHECK(decode(0u) == 0u && m.load32(kInit) == 0u);                                   // empty AU
+    CHECK(kernel.mpeg().find(kData)->video_decoded == 2u);
+    CHECK(!rt.stopped());
+    m.store32(kMpeg, 0x12345678u); // unknown handle: reported
+    (void)decode(0x1234u);
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceMpegAvcDecodeYCbCr(mpeg 0x08CC268C") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -486,6 +517,7 @@ int main() {
     test_mpeg_ycbcr_size();
     test_mpeg_ycbcr_init();
     test_refer_event_flag();
+    test_mpeg_decode_ycbcr();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
