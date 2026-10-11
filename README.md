@@ -1,401 +1,108 @@
-# P3P3DS
+# Persona3DS
 
-**P3P3DS** is an independent research and engineering project working toward running *Shin Megami Tensei: Persona 3 Portable* (`ULUS-10512`, North American release) natively on the **New Nintendo 3DS / New 3DS XL / New 2DS XL** family of consoles.
+**Persona3DS** is a fork of [P3P3DS](https://github.com/endercodezz/P3P3DS) by enderlit aka endercodezz, retargeted from *Persona 3 Portable* to ***Shin Megami Tensei: Persona*** (the 2009 PSP remake of the first Persona, North American release `ULUS-10432`). The goal is the same as upstream's: run the game natively on the **New Nintendo 3DS / New 3DS XL / New 2DS XL** by statically recompiling the PSP's MIPS code to C++ ahead of time and replacing the PSP operating system, graphics and audio with a high-level runtime.
 
----
+All the engineering (the static recompiler, the PSP HLE runtime, the GE-to-PICA200 renderer, NDSP audio, the PC runner and the Builder) comes from P3P3DS. This fork only adds a selectable game profile and the Persona profile, so that upstream fixes can still be merged with `git merge`.
 
-## Status: NOT PLAYABLE YET (New 3DS: first days at 21-30 fps, saves work, no sound; battles slow)
+## Status: does not boot yet
 
-> **IMPORTANT:** The game is **not playable** on PC or Nintendo 3DS. On the PC development runner it boots, shows its logos, plays the opening movie (as black frames: there is no video decoder yet), reaches the title screen with audio and, driven by a scripted controller input, starts a New Game and plays through name entry, the first night in the dorm and the walk to school, where the navigation cursor responds to input. Input comes from deterministic scripts (or an XInput gamepad); there is no window yet, so frames are written as images. On a **real New 3DS** the game runs from the title screen through NEW GAME and the first days at about **30 fps** (drops to 25 in the field, 15 when the first Shadow appears), rendered by the PICA200 GPU, with **no sound yet**. Saving and loading work (save/load menu on the bottom screen). The first battle renders correctly since 0.2.7 (faces, roof, sky, the Shadow; before, a back-face culling rule inverted for 3D draws turned the models inside out and the surroundings black), but runs slowly: 5-7.5 fps on hardware in 0.2.7, about 16 fps in Azahar in 0.2.9 (see Known issues below). The opening movie is skipped automatically (no video decoder yet).
+- [VERIFIED] The host runtime, tools, Builder and tests build and pass without game data (Linux, GCC 13; `ctest` 24/24 with 3 skipped tests that need game data or reference clones).
+- [UNVERIFIED] Nothing has been run on Persona's executable yet. Its load base, RAM size, SDK version, entry point, EBOOT checksums and AOT unit count are placeholders (`TODO`) in [`profiles/p1p/`](profiles/p1p/README.md) until the EBOOT is decrypted and measured.
+- [UNVERIFIED] The built-in EBOOT decryptor only knows the encryption tag P3P uses (`0xD91613F0`). If Persona's EBOOT uses another tag, decrypt it with another tool (e.g. PPSSPP's decrypted EBOOT dump) and pass it with `--decrypted-eboot`.
+- [UNVERIFIED] Which PSP services Persona imports beyond those P3P needed is unknown; the first PC run will stop at the first missing one.
 
-### Known issues (New 3DS, maintainer's tests on a New 2DS XL)
+The verified frontier and its history are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) (the older entries describe upstream's P3P work).
 
-| Issue | Where | State |
-|---|---|---|
-| Battle: slow. 0.2.7 on hardware: 5-7.5 fps, 18-25 % of real time. 0.2.9 in Azahar: about 16 fps, 52 % in the Evoker scene (was 10 fps, 33 % in 0.2.8: vertex cache, merged model draws, cheaper profiling; not yet measured on hardware) | first Shadow battle | next optimisation target (goal: 20 fps first, then the game's full 30 fps) |
-| Dorm: 21-26 fps on the floors (30 in the own room), 89-91 % speed | field | game targets 30 fps |
-| No sound | everywhere | not implemented on 3DS (the PC runner mixes it) |
-| Opening movie skipped | boot | no H.264 / ATRAC3plus decoder |
-| Saves stored in their own format | `sdmc:/p3p3ds/ms0/PSP/SAVEDATA/` | not compatible with PSP or PPSSPP saves |
+## Game profiles
 
-Defects found in the code review of 2026-10-08, not fixed yet (evidence and tests: [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md), "Code review"):
+Everything game-specific lives in a profile directory, selected by one CMake cache variable:
 
-| Issue | Effect | State |
-|---|---|---|
-| Back-face culling uses opposite rules for 2D and 3D draws (PPSSPP uses one rule) | may hide another orientation bug; risk for scenes not yet seen | suspected |
-| Thread stacks and the PSP heap can overlap; stacks and freed heap memory are never reused | memory corruption or out-of-memory in long sessions | reproduced in a unit test; P3P's own peak not measured |
-| Mutexes are not released when their owner thread exits; event-flag result bits differ from the PSP on timeouts | possible deadlock or wrong wake-up | reproduced in a unit test |
-| Every file read, also from the SD card and mods, is slowed to UMD speed in game time | longer loads; a candidate cause of the dorm frame drops | suspected; test on the PC route planned |
-| Only one of the New 3DS CPU cores is used; profiling timers always on | speed left unused | confirmed in code |
-| Save names from the game are not checked before building SD card paths | a corrupted or modded name could write or delete outside the save folder | confirmed in code |
-
-Reports help: the bottom screen and `sdmc:/p3p3ds/report.txt` show the build, speed and where the time goes.
-
-On New 3DS (details in [`docs/3DS_PLATFORM.md`](docs/3DS_PLATFORM.md) sections 8.3 and 8.5):
-
-| Milestone | Result |
-|---|---|
-| `.3dsx` build | devkitARM, 44 MB of recompiled ARM code (cut from 77 MB), clean build in about 9 minutes |
-| Boot | logos, title screen and main menu, drawn by the PICA200; logo positions pixel-identical to the PC renderer; the opening movie is skipped (no video decoder yet) |
-| Speed | about 30 game frames/s in the own room and at school, 21-26 on the dorm floors; 88 % of real time on average over 21 minutes (CPU rendering at first: 5 %, 2 fps); first battle 5-7.5 fps (0.2.7, hardware), about 16 fps (0.2.9, Azahar) |
-| Saves | save and load at the dorm desk and from LOAD GAME, menu on the bottom screen |
-| First battle | starts since 0.2.5; transform, skinning and lighting on the GPU since 0.2.6; renders correctly since 0.2.7 (culling fix); slow (see Known issues) |
-| Memory | heap 71,220 KiB with 60,284 KiB in use (hardware, 2026-10-02; 12 MiB linear heap); about 10.7 MiB free |
-| Screens | top: the game; bottom: authorship and debug data (fps, speed, where the time went over the last 10 s, memory), also saved to `sdmc:/p3p3ds/report.txt` |
-
-Measured on the PC runner (ULUS-10512, details and evidence in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md)):
-
-| Milestone | Result |
-|---|---|
-| Whole `.text` statically recompiled | 237 C++ units, 751,674 instruction PCs; leftovers run through an interpreter fallback (0 mismatches vs AOT on 1,200 differential cases) |
-| Boot | ThreadMan, SysMem, IoFileMgr (UMD ISO + memory stick + the community mod chain), ModuleMgr, UMD, Display services drive the game through CRI middleware startup |
-| First rendered frames | ATLUS and CRIWARE logos drawn by the GE display-list executor + software renderer |
-| Opening movie | 100 s PSMF movie demultiplexed by `sceMpeg` (on the pspautotests sample movie, container behaviour matches PSP hardware output line for line); picture and movie audio are placeholders (black / silence) |
-| Title screen | "PRESS ANY BUTTON" from vblank 6627 (~110 s virtual time), menus at 30 frames/s, title music recorded to WAV |
-| Main menu and New Game | START opens NEW GAME / LOAD GAME / CONFIG / DATA INSTALL; NEW GAME loads the protagonist selection scene ("Welcome to the world of P3P.") |
-| First game day | Dark Hour dorm lobby (3D), name entry, Mitsuru introduction, own room with the navigation cursor, next morning with Yukari, school main lobby; 38 virtual minutes without a blocker |
-| Stability | 38,314 frames (24 min virtual) of the attract loop without a blocker; runs with the same input script are bit-for-bit deterministic |
-| Tests | CTest suites for HLE contracts, renderer, input and AOT/interpreter differential, several replaying pspautotests hardware transcripts |
-
----
-
-## Progress Checklist
-
-- [x] Analyze P3P executable structure (ELF32 PRX, segments, sections)
-- [x] Full PRX relocation and library import table extraction (178,513 relocations, 221 import stubs)
-- [x] Independent relocation-aware validation tooling matching PSPRecomp 100%
-- [x] Whole-`.text` Ahead-of-Time (AOT) MIPS-to-C++ generation in fixed 16 KiB units, with an interpreter fallback
-- [x] Core PSP kernel services (SysMem, ThreadMan with waits/callbacks/virtual time, UtilsForUser, ModuleMgr)
-- [x] Virtual File System: UMD ISO9660, memory stick, CWCheat "Mod Support" chain (`bind/` → `mod.cpk` → `mod1-3.cpk` → original CPKs)
-- [x] GE display-list execution with a reference software renderer (first visible frames, title screen)
-- [x] `sceAudio`, `sceSasCore` and PCM output to WAV on PC
-- [x] `sceMpeg` container/ringbuffer behaviour (PSMF demux)
-- [ ] H.264 / ATRAC3plus decoding for the opening movie
-- [x] Controller input: scripted (deterministic) and XInput gamepad
-- [ ] Live window and audio device on PC
-- [x] Main menu and New Game start
-- [x] Name entry, introduction and first controllable section (scripted input)
-- [ ] Complete renderer (filtering, lines, lighting/skinning as the game needs) and movie decoding
-- [x] PICA200 (citro3d) renderer: logos, title screen, main menu
-- [x] P3P3DS Builder: ISO -> `.3dsx` on the user's PC (Windows wizard)
-- [x] Runs on a real New 3DS (about 30 fps in the first days)
-- [x] Savedata on hardware (bottom-screen menu)
-- [x] Battles rendered correctly (lighting, skinning on the GPU)
-- [ ] Battles at full speed, sound (ndsp), movie decoding
-- [ ] ndsp audio, live controls tested and `.cia` for New 3DS
-- [ ] Playable game on New Nintendo 3DS hardware
-
----
-
-## Running on a New 3DS
-
-There is **no ready-made download of the game**: the `.3dsx` contains code generated from the game's executable (and the decrypted executable itself), so it must never be shared. Instead, the **P3P3DS Builder** turns your own copy of the game into `p3p3ds.3dsx` on your PC.
-
-You need:
-- a **New 3DS / New 3DS XL / New 2DS XL** with custom firmware and the Homebrew Launcher (Old 3DS models are not supported yet);
-- your own *Persona 3 Portable* `ULUS-10512` ISO;
-- Windows 10/11 or Linux x86-64, and [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the **3DS Development** component (Windows installer, or `dkp-pacman -S 3ds-dev` on Linux; the builder uses its ARM compiler and 3DS libraries).
-
-### With the P3P3DS Builder (recommended)
-
-1. Download `P3P3DS-Builder-<version>.zip` from the GitHub Releases page and unpack it anywhere.
-2. Run `P3P3DS-Builder.exe`, choose your ISO (devkitPro is found automatically when installed in the usual place) and press **Build**.
-3. Wait about 5-15 minutes: the game's code is translated to C++ and compiled for the 3DS on all CPU cores, with a progress bar, a time estimate and Persona 3 trivia. An interrupted build continues where it stopped.
-4. The builder can copy everything to your SD card itself; otherwise copy as shown below.
-
-On Linux the builder is a console program (`P3P3DS-Builder-<version>-linux.tar.gz`): `./P3P3DS-Builder --iso <iso> [--devkitpro <dir>] [--out <file>] [--jobs <n>]`; devkitPro is looked up in `$DEVKITPRO`, then `/opt/devkitpro`. On NixOS run it inside `p3p-3ds` from `shell.nix`, where devkitPro's prebuilt binaries work.
-
-The builder package (about 2 MB zipped) contains no game data: only the prebuilt P3P3DS runtime for the 3DS, the code generator and the community CWCheat patch list; everything made from the game is generated on your PC. Measured clean builds on a 12-thread CPU: 4 min 23 s with 12 compiler jobs, 4 min 55 s with 7 (the builder picks the number from CPU cores and free memory).
-
-### By hand (developers)
-
-1. Prepare the game files once: `python tools/prepare_game.py "/path/to/Persona 3 Portable.iso"` ([Game Setup](#game-setup-one-command-preparation)).
-2. Build the PC tools ([Build](#build)), then the 3DS runner ([Build for New 3DS](#build-for-new-3ds)). The result is `build/3ds/p3p3ds.3dsx`.
-
-### On the SD card
-
-1. Copy to the microSD card:
-   ```text
-   SD card
-   ├── 3ds/
-   │   └── p3p3ds.3dsx          <- build/3ds/p3p3ds.3dsx
-   └── p3p3ds/
-       └── <any name>.iso       <- your ULUS-10512 image (the first .iso found is used)
-   ```
-   The runner creates `p3p3ds/ms0/` (memory stick), `p3p3ds/mods/` (mod chain, see below) and `p3p3ds/report.txt` itself.
-2. Start **P3P3DS** from the Homebrew Launcher.
-
-The top screen shows the game, the bottom screen authorship and a live debug report (fps, speed, memory, time split), also written to `sdmc:/p3p3ds/report.txt` every few seconds and on exit — please attach it to bug reports.
-
-| 3DS | PSP |
-|---|---|
-| B / A / Y / X | Cross (confirm) / Circle (back) / Square / Triangle — by position |
-| D-Pad, Circle Pad | D-Pad, analog stick |
-| L / R, START, SELECT | L / R, START, SELECT |
-| START + SELECT | quit P3P3DS |
-
-What to expect today: logos, title screen, main menu, NEW GAME and the following scenes, rendered by the GPU at about 30 fps on a New 3DS (the runner never runs faster than real time); **no sound**; battles start but render almost black (no lighting or skinning yet); the opening movie is skipped automatically (no video decoder yet; an empty `sdmc:/p3p3ds/play_movies.txt` disables the skip); saves are chosen in a menu on the bottom screen (D-Pad, B confirm, A back) and stored in `sdmc:/p3p3ds/ms0/PSP/SAVEDATA/` - they are not compatible with PSP or PPSSPP saves; 3D scenes have no lighting yet.
-
-**Old 3DS / 2DS** cannot run P3P3DS yet. Support is planned, but not soon: today it needs about 112 MB of application memory and the New 3DS CPU speed, while the Old 3DS offers at most 96 MB and a 268 MHz CPU without L2 cache, so it needs a different approach rather than tuning (see [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md)).
-
-Memory [UNVERIFIED on hardware]: the runner needs about 112 MB of application memory (44 MB of code, 32 MB of PSP RAM, the runtime and GPU buffers). If the bottom screen reports that it ran out of memory, the Homebrew Launcher was started with a smaller memory mode than the game needs.
-
-Emulator: Azahar works too — enable New 3DS mode, put the ISO in its virtual SD card under `p3p3ds/`, and open the `.3dsx`.
-
----
-
-## Goal
-
-The long-term goal of this project is a smooth, high-fidelity experience of Persona 3 Portable running natively on New Nintendo 3DS hardware, with support for user-supplied community mods and fan translations.
-
-We are **not** building a general-purpose PSP emulator, nor an all-encompassing PPSSPP replacement. The scope is specifically tailored to Persona 3 Portable.
-
----
-
-## Why P3P?
-
-*Persona 3 Portable* is uniquely well-suited for a static recompilation port to the New Nintendo 3DS:
-- **Visual Novel Navigation:** The 2D exploration and dialogue format of P3P maps naturally to dual-screen handheld hardware.
-- **Relatively Low VFPU Density:** Only ~0.31% of the instruction stream uses PSP VFPU vector instructions (compared to heavily math-intensive titles like Monster Hunter or racing games).
-- **Atlus Script Engine:** Story flow and cutscene logic run via an internal bytecode engine (`.bf`), meaning gameplay scripting is isolated from low-level MIPS machine code.
-- **No Evidence of Self-Modifying Code Observed So Far `[UNVERIFIED]`:** Static analysis shows standard relocatable code with clean function prologues/epilogues; runtime verification across deeper gameplay loops remains ongoing.
-
----
-
-## Current Architecture
-
-The project employs **Hybrid Static Recompilation (AOT)**:
-
-```text
-Decrypted P3P Executable (Allegrex MIPS ELF) + community CWCheat patches
-                    │
-                    ▼
-     Offline Static Recompiler (recomp/PSPRecomp, psp_recomp --auto)
-  (lowers all of .text to 237 C++ translation units of 16 KiB each)
-                    │
-                    ▼
-       Native Host C++ Compilation
-     (GCC on PC, devkitARM GCC on New 3DS)
-                    │
-                    ▼
-          P3P3DS Runtime (core/)
-  ├── Interpreter fallback for PCs without an AOT entry
-  ├── PSP HLE kernel: SysMem, ThreadMan (deterministic virtual clock),
-  │   IoFileMgr, ModuleMgr, UMD, Display, Ctrl, Audio, SasCore, Mpeg, ...
-  ├── Virtual File System (UMD ISO9660 / host directories, mod overlay)
-  ├── GE display-list executor → GeRenderer interface
-  │     └── SoftwareRenderer (reference backend, draws into guest VRAM)
-  └── Platform backends:
-       ├── platform/pc  — development runner: frame dumps, WAV output, event traces
-       └── platform/3ds — New 3DS runner (.3dsx): top screen game, bottom screen
-                          debug report; Citro3D renderer + NDSP audio planned
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release            # default: -DP3P_PROFILE_DIR=profiles/p1p
+cmake -S platform/3ds -B build/3ds ... -DP3P_PROFILE_DIR=profiles/p1p   # same variable for the 3DS build
 ```
 
-1. **Game Machine Code:** Recompiled offline into native C++ translation units; PCs the static analysis missed are executed by an interpreter whose semantics mirror the code generator (checked by a differential test).
-2. **PSP Kernel & Services:** A lightweight High-Level Emulation (HLE) runtime implementing only what P3P imports, with contracts taken from uOFW, PSPSDK and pspautotests hardware output.
-3. **Graphics Engine (GE):** Display lists are executed in `core/`; a renderer interface lets the PC reference rasterizer and a future PICA200 (`citro3d`) backend share the same command processing.
-4. **Audio:** Guest PCM (`sceAudio`, `sceSasCore`, CRI middleware) is mixed on the virtual clock; on 3DS it is intended for the hardware DSP (`ndsp`).
-
----
-
-## New 3DS Target Constraints
-
-This project targets the **New Nintendo 3DS / New 3DS XL / New 2DS XL** exclusively (Old 3DS / 2DS is not supported yet; planned for much later):
-- **CPU:** Quad-core ARM11 MPCore @ 804 MHz with L2 cache enabled via `osSetSpeedupEnable(true)` (vs 268 MHz on Old 3DS).
-- **RAM:** 256 MB FCRAM (vs 128 MB on Old 3DS). The `.3dsx` currently holds 44 MB of recompiled code plus the 32 MB guest RAM and the runtime; a `.cia` can request a larger memory mode.
-- **Worker Core:** Core 2 needs exheader kernel flag `0x2000` (libctru `thread.h`); whether the `.3dsx` can use it under the Homebrew Launcher is not yet tested. The runtime currently uses only Core 0 (`docs/3DS_PLATFORM.md` section 3).
-
----
-
-## Dual-Screen Presentation (Future Design Goal)
-
-While keeping classic 1:1 PSP presentation intact, the architecture is designed to support enhanced dual-screen modes:
-- **Top Screen (400x240):** 3D Tartarus exploration, battle scenes, and animated event sequences.
-- **Bottom Screen (320x240):** Dialogue boxes, choice selections, minimaps, party status, and touch-screen shortcuts.
-
----
-
-## Modding & Localization Architecture (Design Goals)
-
-Modding support and fan translations are first-class architectural requirements:
-- **Language-Agnostic Core:** No language strings, fonts, or specific localization hacks will be hardcoded into the runtime engine.
-- **VFS Fallback Pipeline:** P3P on PSP loads mods through the community CWCheat "Mod Support" patch (`p3p/p3p-patches`), which the recompiler applies to the executable. The runtime serves the paths it opens, mapped to the SD card on 3DS:
-  ```text
-  sdmc:/p3p3ds/mods/bind/<relative_path>   (loose file overrides, ms0:/PSP/P3P/bind/)
-    ↓
-  sdmc:/p3p3ds/mods/mod.cpk                (user mod package)
-    ↓
-  sdmc:/p3p3ds/mods/mod1.cpk ... mod3.cpk  (additional mod archives)
-    ↓
-  disc0:/PSP_GAME/USRDIR/umd0.cpk, umd1.cpk (original game archives)
-  ```
-  On PC, `--mods <dir>` maps `ms0:/PSP/P3P` to a host directory.
-- **Translation & Mod Support (Future Goal):** The architecture aims to support community translations (such as Russian, Spanish, German, French) and mods via VFS redirection. Note that translations are not guaranteed to be drop-in asset-only packages: individual localizations may require custom font sheets, character encoding tables, `.bmd`/`.bf` script handling, or runtime executable hooks (such as glyph-spacing/kerning adjustments).
-
----
-
-## Repository Structure
-
-```text
-P3P3DS/
-├── 3ds/                 # (not in git) 3DS library sources for reading: libctru, citro3d, picasso
-├── core/                # Target-agnostic runtime: HLE kernel, VFS, interpreter, GE executor + software renderer
-├── docs/                # Current state, architecture, verification registry, research notes
-├── experiments/         # Standalone analyses (decoder audit, CPK checker, microtests)
-├── platform/
-│   ├── pc/              # PC development runner (frame dumps, WAV output, event traces)
-│   └── 3ds/             # New 3DS runner (.3dsx), built with devkitARM
-├── profiles/p3p/        # P3P profile: AOT layout, patches, addresses, game inputs (local only)
-├── recomp/PSPRecomp/    # Static recompilation framework the build uses (other recompilers: not in git)
-├── references/          # (not in git) reference emulators and hardware autotests (PPSSPP, pspautotests, uOFW)
-├── psp/                 # (not in git) PSP SDK, VFPU documentation, Ghidra definitions
-├── tests/               # CTest suites (HLE contracts, renderer, differential AOT/interpreter)
-└── tools/               # Build and analysis scripts (asset tools such as CriFsV2Lib: not in git)
-```
-
----
+| File (in `profiles/p1p/`) | Used by |
+|---|---|
+| `config/p1p_ulus10432.toml` | `tools/prepare_game.py`: disc ID, checksums |
+| `config/profile.cmake` | both CMake projects: functions CSV, optional CWCheat `.ini`, `.3dsx` metadata, smoke-test gate |
+| `config/aot_layout.cmake` | `psp_recomp --auto` load base, unit span and unit count |
+| `config/profile_info.hpp` | 3DS runner, PC runner, Builder: title, disc ID, SD folder, mods folder, ELF SHA-256 |
+| `config/bootstrap_expectations.hpp` | runners: root stack and the `--verify-bootstrap` checkpoint |
+| `config/p1p_functions.csv`, `config/frontier_seeds.csv` | MANUAL generation and `tools/chase_frontier.py` (`P3P_PROFILE_DIR` environment variable, same default) |
+| `game/` (local, gitignored) | `eboot.elf` and `USRDIR/` written by `tools/prepare_game.py` |
 
 ## Prerequisites
 
-To build the PC runner and development tools:
-- **CMake** (version 3.20 or newer)
-- **Ninja**
-- **C++20 Compiler** (measured with GCC 16.1 / MinGW-w64; other compilers are untested)
-- **Python 3.10+** (code generation helpers, analysis and verification scripts)
-- About **5 GB of RAM** and ~11 minutes on a 12-thread CPU for a clean build of the 237 generated units (`-j10`)
-- Optional: .NET SDK for `experiments/cpk-check` (CPK inspection)
-- For the New 3DS build: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the `3ds-dev` packages (devkitARM, libctru, citro3d, picasso, 3dsxtool)
+- CMake 3.20+, Ninja, a C++20 compiler (built here with GCC 13; upstream CI uses GCC 14), Python 3.11+ (standard library only; `tomllib`).
+- For the New 3DS build: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS packages.
+- Your own *Shin Megami Tensei: Persona* `ULUS-10432` ISO. Reported ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` (third-party listing, [UNVERIFIED]; `prepare_game.py` prints the measured value).
 
----
-
-## Game Setup (One-Command Preparation)
-
-This repository contains **no copyrighted game assets or proprietary executables**. You must supply files from your own legally owned copy of *Shin Megami Tensei: Persona 3 Portable* (`ULUS-10512`).
-
-Run the automated game preparation tool pointing to your retail ISO image:
+## Game setup
 
 ```bash
-python tools/prepare_game.py "/path/to/Persona 3 Portable.iso"
+python tools/prepare_game.py "<your Persona ISO>" --check-only
+python tools/prepare_game.py "<your Persona ISO>"
 ```
 
-The tool automatically:
-1. Verifies ISO9660 disc integrity and `PARAM.SFO` metadata (`ULUS10512`).
-2. Decrypts the Allegrex executable (`EBOOT.BIN` -> `profiles/p3p/game/eboot.elf`) via the PSP AES-128 engine.
-3. Validates the decrypted binary against the verified reference SHA-256 (`be2abbd4...`).
-4. Extracts game assets (`USRDIR/` containing CPK archives) into `profiles/p3p/game/USRDIR/`.
+It checks `PARAM.SFO` (`ULUS10432`), decrypts `EBOOT.BIN` to `profiles/p1p/game/eboot.elf` and extracts `USRDIR/`. While the profile's checksums are placeholders it prints the measured hashes and continues with a warning; paste them into the profile once confirmed. Game files never enter the repository.
 
-*(All extracted files in `profiles/p3p/game/` are strictly local and gitignored.)*
-
-*(Optional fallback: If you already have a pre-decrypted ELF, pass `--decrypted-eboot /path/to/eboot.elf`.)*
-
-The runner reads game data directly from the ISO at run time: keep the `.iso` in the repository root (it is gitignored) or pass `--umd <iso>`.
-
----
-
-## Development Workflow
-
-### Build
+## Build
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j10
-ctest --test-dir build -j6
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-`-DP3P_AOT_TRANSFER_RECORDS=OFF` generates code without per-branch diagnostics (smaller and ~17% faster on PC, but without the transfer trace used by the frontier tooling).
+Without `profiles/p1p/game/eboot.elf` both CMake projects build everything that does not come from the game (runtime, tools, Builder, tests). With the EBOOT present, configuring stops until `P3P_AOT_UNIT_COUNT` is set in `aot_layout.cmake`; the error message prints the `psp_recomp --auto` command that measures it.
 
-### Build for New 3DS
-
-Needs [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS packages and the host build above (it provides `psp_recomp`). devkitPro's CMake toolchain only works from its own msys2 shell:
+New 3DS (devkitPro msys2 shell, after the host build):
 
 ```bash
-export DEVKITPRO=/opt/devkitpro DEVKITARM=/opt/devkitpro/devkitARM
-cmake -S platform/3ds -B build/3ds -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/3DS.cmake -DCMAKE_BUILD_TYPE=Release
-make -C build/3ds -j10
+cmake -S platform/3ds -B build/3ds -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/3DS.cmake -DCMAKE_BUILD_TYPE=Release
+make -C build/3ds
 ```
 
-A clean build takes about 9 minutes; after a runtime change only a few files and the link are rebuilt. Installing and running it: [Running on a New 3DS](#running-on-a-new-3ds). The `.3dsx` embeds code generated from your game executable: it is for your own use, never for distribution.
+On the SD card: `/3ds/p3p3ds.3dsx` (CMake target name kept from upstream; the Builder names it `persona3ds.3dsx`) and your ISO in `/persona3ds/`. The `.3dsx` embeds code generated from your game executable: it is for your own use, never for distribution.
 
-Debugging aids: a number N in `sdmc:/p3p3ds/dump_every.txt` saves the top screen every N vblanks to `sdmc:/p3p3ds/frames/` (compare with the PC runner's `--frames-dir`). An empty `sdmc:/p3p3ds/no_vertex_cache.txt` turns the model vertex cache off, for speed comparisons (bottom-screen line `vtx: fill ... cache hit ...%`). The GE renderer runs on the New 3DS's second application core when the start-up check finds it (`cores :` line); an empty `sdmc:/p3p3ds/no_gpu_thread.txt` keeps it on the main core.
-
-### Build the P3P3DS Builder release
+## Run on PC
 
 ```bash
-cmake --build build --target p3p3ds_builder          # P3P3DS-Builder.exe (Win32 wizard) / P3P3DS-Builder (Linux console), static
-python platform/pc/builder/make_release.py --version 0.1.0 --devkitpro <devkitPro folder>
+./build/p3p_pc_bootstrap --run-until-blocker --max-dispatches 1000000 --dump-events .tmp/p1/run.json
 ```
 
-`make_release.py` needs the host build (`psp_recomp.exe`) and the New 3DS build in `build/3ds/` (runtime objects, CWCheat patch list); it packages the build of the platform it runs on: `out/P3P3DS-Builder-<version>/` and a `.zip` on Windows, `out/P3P3DS-Builder-<version>-linux/` and a `.tar.gz` on Linux. `P3P3DS-Builder.exe --cli --iso <iso> [--devkitpro <dir>] [--jobs <n>]` runs the same build without the window. Sources: `platform/pc/builder/` (pipeline, EBOOT decryption, wizard, trivia).
+The runner prints why it stopped (missing HLE service, unsupported instruction, missing function, fault or budget). Options are listed in `platform/pc/main.cpp` and in upstream's README; `--verify-bootstrap` needs measured `bootstrap_expectations.hpp` values.
 
-### Continuous integration and releases (GitHub Actions)
-
-Without the game files (no `profiles/p3p/game/eboot.elf`) both CMake projects build everything that does not come from the game: the host runtime, tools, P3P3DS Builder and tests (the AOT code, the PC runner and the tests that run game code are left out), and the New 3DS runtime the Builder ships (no `.3dsx`). GitHub Actions uses this:
-
-- `.github/workflows/ci.yml`, on every push to `master` and every pull request: Linux (GCC 14) and Windows (MSYS2 UCRT64 GCC) host build + CTest, New 3DS runtime in the `devkitpro/devkitarm` container.
-- `.github/workflows/release.yml`: pushing a tag `v<version>` that matches `FileVersion` in `platform/pc/builder/builder.rc` builds the New 3DS runtime (debug info stripped), the Windows and Linux Builder packages with `make_release.py`, and publishes them as a GitHub release (an existing release of that tag gets the files replaced). Started by hand (Actions -> Release -> Run workflow, with a branch or commit) it only builds the packages as workflow artifacts, for a dry run.
-
-To release: bump the version in `builder.rc`, commit, push, then `git tag v<version>` and `git push origin v<version>`.
-
-### Run the game on PC
+## Merging upstream
 
 ```bash
-# Boot until the title screen (~45 s wall), dumping every 60th frame and all audio
-./build/p3p_pc_bootstrap.exe --run-until-blocker --max-dispatches 20000000 \
-    --frames-dir .tmp/frames --frame-every 60 --wav .tmp/p3p.wav --dump-events .tmp/run.json
+git remote add upstream https://github.com/endercodezz/P3P3DS
+git fetch upstream
+git merge upstream/master
 ```
 
-The runner prints the stop reason and a summary; `--dump-events` writes a JSON trace of HLE calls, thread switches, GE lists, frames (with hashes) and audio statistics.
+[INFERRED] Upstream changes to `core/`, `recomp/PSPRecomp/`, the renderer and the PC runner should merge without conflicts, because this fork only touched them for profile wiring (a few lines in `platform/pc/main.cpp`, `platform/pc/telemetry.hpp`, `platform/3ds/main.cpp`, the Builder and both `CMakeLists.txt`). Upstream changes to the deleted P3P files (`profiles/p3p/`, `p3p/p3p-patches/`, the `p3p-modding-vfs` skill) show up as modify/delete conflicts: keep them deleted (`git rm <path>`), and port anything generic into `profiles/p1p/` by hand.
 
-| Option | Purpose |
-|---|---|
-| `--run-until-blocker` | run until a missing service, a fault or the dispatch budget |
-| `--max-dispatches <n>` | dispatch budget (20M ≈ title screen) |
-| `--umd <iso>` | game image mounted as `disc0:` (default: the single `*.iso` in the working directory) |
-| `--ms0 <dir>` / `--mods <dir>` | memory stick root (default `out/ms0`) / directory mapped to `ms0:/PSP/P3P` for mods |
-| `--input <file>` | vblank-keyed controller script, e.g. `profiles/p3p/input/new_game.txt` (format in `core/include/p3p3ds/input.hpp`) |
-| `--gamepad` | read XInput controller 0 |
-| `--profile` | wall-time split between HLE, GE rendering and interpreter |
-| `--frames-dir <dir>` `--frame-every <n>` | write displayed frames as BMP |
-| `--wav <file>` | mix all game audio on the virtual clock into a 44.1 kHz stereo WAV |
-| `--dump-events <json>` / `--io-trace <csv>` | execution trace / file reads (for `experiments/cpk-check`) |
-| `--no-interpreter` | stop at PCs without AOT code instead of interpreting |
-| `--verify-bootstrap` | fixed early-boot checkpoint used by CTest |
+## Documentation
 
-Execution is deterministic: two runs with the same options produce byte-identical traces, frames and audio.
-
-### Reproduce Full Analysis Pipeline
-
-```bash
-bash experiments/p3p-analysis/reproduce_analysis.sh
-```
-
-### Documentation
-
-- [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) — what works today, with evidence for every claim.
-- [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md) — roadmap and the movie/audio decoding plan.
-- [`docs/VERIFICATION.md`](docs/VERIFICATION.md) — registry of technical claims and their status.
-- [`docs/3DS_PLATFORM.md`](docs/3DS_PLATFORM.md) — New 3DS backend design and measurements.
-- [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) — engineering rules for contributors and coding agents; project skills live in `.claude/skills/`.
-
----
+- [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md): the verified frontier, newest first.
+- [`docs/VERIFICATION.md`](docs/VERIFICATION.md), [`docs/NEXT_STEPS.md`](docs/NEXT_STEPS.md), [`docs/3DS_PLATFORM.md`](docs/3DS_PLATFORM.md): upstream P3P3DS documents, kept as reference.
+- [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md): engineering rules; project skills in `.claude/skills/`.
 
 ## License
 
-The original P3P3DS code and documentation are released under the [MIT License](LICENSE). Third-party code in this repository: `recomp/PSPRecomp` (MIT) and `p3p/p3p-patches` (community CWCheat list); both keep their own licenses. `recomp/PSPRecomp/profiles/vcs/` (another game's profile, with FFmpeg headers) is part of the upstream PSPRecomp tree and is not used by this build. The research sources (`references/`, `psp/`, `3ds/`, the other recompilers in `recomp/`, the asset tools in `tools/`, the P3P mod menu) are not part of the repository: `python tools/fetch_references.py` clones them from their upstreams (the build does not need them; the tests that compare against pspautotests skip without it). Game data is never part of the repository.
+MIT, see [LICENSE](LICENSE) (copyright endercodezz and contributors; this fork's changes are under the same license). `recomp/PSPRecomp` is vendored third-party code (MIT). Research sources fetched by `python tools/fetch_references.py` and all game data are never part of the repository.
+
+## Legal notice
+
+This is an independent research project, not affiliated with, endorsed by or connected to Atlus, SEGA, Sony Interactive Entertainment or Nintendo. No proprietary game binaries, copyrighted assets or encryption keys of the consoles' firmware are distributed here; you must supply files from your own legally owned copy of the game.
 
 ---
 
-## Legal & Open-Source Research Notice
-
-- This project is an independent reverse-engineering and open-source research effort.
-- It is not affiliated with, endorsed by, or connected to Atlus, SEGA, Sony Interactive Entertainment, or Nintendo.
-- No proprietary game binaries, copyrighted assets, encrypted firmware keys, or commercial code are distributed in this repository.
-- All reverse engineering data and HLE implementations are derived from independent analysis, open-source references (`pspsdk`, `uofw`), and publicly available community research.
-
----
 ## Upstream References & Credits
 
-P3P3DS stands on many open projects. Full inventory with licences and how each is used: [`docs/REPOSITORIES.md`](docs/REPOSITORIES.md). Code is never copied from GPL emulators; they are read as behaviour references.
+**Persona3DS is based on [P3P3DS](https://github.com/endercodezz/P3P3DS) by enderlit aka endercodezz.** P3P3DS stands on many open projects. Full inventory with licences and how each is used: [`docs/REPOSITORIES.md`](docs/REPOSITORIES.md). Code is never copied from GPL emulators; they are read as behaviour references.
 
 **Static recompilation**
 

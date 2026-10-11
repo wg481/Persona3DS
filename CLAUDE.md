@@ -6,14 +6,16 @@ Working instructions for all contributors and coding agents working in this repo
 
 ## 1. What is P3P3DS
 
-**Objective:** Run *Persona 3 Portable* (`ULUS-10512`, North American release) on the **New Nintendo 3DS / New 3DS XL / New 2DS XL** family of consoles.
+**Objective:** Run *Shin Megami Tensei: Persona* (PSP remake, `ULUS-10432`, North American release) on the **New Nintendo 3DS / New 3DS XL / New 2DS XL** family of consoles.
+
+This repository (Persona3DS) is a fork of [P3P3DS](https://github.com/endercodezz/P3P3DS), which targets *Persona 3 Portable* (`ULUS-10512`). The engine is unchanged and game-neutral; everything game-specific lives in the profile selected by `P3P_PROFILE_DIR` (default `profiles/p1p`). Do not edit `core/`, `recomp/PSPRecomp/`, `platform/3ds/gpu_renderer.*` or `platform/pc/` beyond profile wiring, and do not rename existing identifiers, namespaces (`p3p3ds::`), CMake variables (`P3P_*`) or files: upstream fixes must keep merging with `git merge`. Comments and docs that mention P3P are upstream history.
 
 **Working Hypothesis (Architecture C: Hybrid Static Recompilation):**
-- **P3P Allegrex code:** Ahead-of-Time (AOT) offline static recompilation into C/C++ translation units, compiled to native ARM11 machine code via devkitARM GCC.
+- **Game Allegrex code:** Ahead-of-Time (AOT) offline static recompilation into C/C++ translation units, compiled to native ARM11 machine code via devkitARM GCC.
 - **PSP OS & Kernel services:** Lightweight, modular High-Level Emulation (HLE) runtime (C/C++).
 - **PSP Graphics Engine (GE):** Native `citro3d` / DMP PICA200 hardware renderer backend.
 - **PSP Audio:** Native Nintendo 3DS DSP (`ndsp`) hardware-accelerated audio backend.
-- **PSP Filesystem:** Multi-tier Virtual File System (VFS) with runtime mod and asset redirection on SDMC (`sdmc:/p3p3ds/`).
+- **PSP Filesystem:** Multi-tier Virtual File System (VFS) with runtime mod and asset redirection on SDMC (`sdmc:/persona3ds/`).
 
 *The architecture is not a dogma:* If empirical experiments or profiling demonstrate that an aspect (e.g. interpreter fallback for unresolved indirect calls, or an alternative renderer pipeline) is superior, document the proof with benchmarks and propose the revision.
 
@@ -62,7 +64,7 @@ Read and follow [AGENTS.md Section 4](AGENTS.md#4-source-hierarchy) for the cano
 
 ## 5. Repository Boundaries & Third-Party Code
 
-Tracked third-party code: `recomp/PSPRecomp` and `p3p/p3p-patches`. Never mass-refactor or reformat them; a needed change is the **minimal viable patch**, commented with the reason (`P3P3DS:`), without unrelated cleanups.
+Tracked third-party code: `recomp/PSPRecomp`. Never mass-refactor or reformat them; a needed change is the **minimal viable patch**, commented with the reason (`P3P3DS:`), without unrelated cleanups.
 
 Research sources (`references/`, `psp/`, `3ds/`, other recompilers in `recomp/`, the asset tools) are untracked clones made by `python tools/fetch_references.py`; read them, never edit them. Everything else, including `tools/*.py`, is P3P3DS code.
 
@@ -108,11 +110,11 @@ Every functional change must include a verifiable test method:
 
 ---
 
-## 8. Persona 3 Portable Target Scope
+## 8. Persona (PSP) Target Scope
 
-- Initial target: **ULUS-10512** (US release).
-- Do not introduce EU (`ULES-01523`) or JP (`ULJM-05500`) support until the US build boots and functions correctly.
-- All game-specific addresses, hook offsets, and structures must reside in `profiles/p3p/config/` with clear attribution and verification tags.
+- Initial target: **ULUS-10432** (*Shin Megami Tensei: Persona*, US release, 2009-09-22).
+- Do not introduce other regions (EU or JP releases) until the US build boots and functions correctly.
+- All game-specific addresses, hook offsets, and structures must reside in `profiles/p1p/config/` with clear attribution and verification tags. Values not yet measured stay `TODO` placeholders, never plausible-looking guesses.
 - **Never scatter hardcoded magic addresses across generic runtime code.**
 
 ---
@@ -123,7 +125,7 @@ Generic modding support and arbitrary localization packages are first-class arch
 - Asset modifications must not require recompiling the runtime executable.
 - The runtime must remain language-neutral: no specific translation or language may be hardcoded into the core engine.
 - Support arbitrary community mod packages and fan translations equally; community binary hooks (CWCheat/EBOOT patches) are applied cleanly through the profile.
-- The verified mod fallback chain (`bind/` -> `mod*.cpk` -> `umd0.cpk`/`umd1.cpk`) is in the `p3p-modding-vfs` skill.
+- No mod loader path is known for Persona yet (`mods_alias` is empty in `profiles/p1p/config/profile_info.hpp`); P3P's mod chain was upstream-specific.
 
 ---
 

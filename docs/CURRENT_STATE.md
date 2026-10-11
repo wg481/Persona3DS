@@ -1,6 +1,20 @@
 # P3P3DS current execution state
 
-This is the current source of truth, newest entries first. Evidence concerns ULUS-10512; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
+This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
+
+## Persona 1 (ULUS-10432) retarget (2026-10-11)
+
+The fork now targets *Shin Megami Tensei: Persona* (PSP, ULUS-10432, released 2009-09-22 [UNVERIFIED]). No Persona code has run yet: this entry records the repository change only.
+
+- Profile selection: one CMake cache variable `P3P_PROFILE_DIR` (default `profiles/p1p`) in `CMakeLists.txt` and `platform/3ds/CMakeLists.txt`; every profile path (EBOOT, function/seed manifests, AOT layout, CWCheat selection, include path of `bootstrap_expectations.hpp` / `profile_info.hpp`) is built from it. `tools/prepare_game.py` (`--profile`) and `tools/chase_frontier.py` (`P3P_PROFILE_DIR` environment variable) use the same default. The CWCheat step is optional (`tools/cwcheat_patches.py none ...` writes an empty patch list, which `psp_recomp`'s `load_patches` accepts: `recomp/PSPRecomp/tools/codegen_main.cpp`, `load_patches`).
+- Removed: `profiles/p3p/`, `p3p/p3p-patches/`, the `p3p-modding-vfs` skill. The 3DS runner's SD base is `sdmc:/persona3ds`; the `ms0:/PSP/P3P` mods alias is mounted only when the profile names one (Persona: none).
+- [VERIFIED] Linux host (GCC 13, Ninja), no game data: configure, build (including the console Builder), `ctest` 24/24 passed with 3 skipped (`p3p_modulemgr`, `p3p_mpeg`: no game data; `p3p_autotest_baseline`: no pspautotests clone), identical to the pre-retarget baseline. A stand-in profile directory with a dummy `game/eboot.elf` stops configuring with the unit-count message, and with a count set generates the `cwcheat_patches.py none` command.
+- [UNVERIFIED] The 3DS CMake project and `platform/3ds/main.cpp` were not configured or compiled (no devkitPro in the environment used); the Windows Builder wizard was not compiled.
+- Placeholders (`TODO`, never guessed): `profiles/p1p/config/p1p_ulus10432.toml` (RAM size, load base, SDK version, entry point, EBOOT and ELF SHA-256; ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` from a third-party listing [UNVERIFIED]), `aot_layout.cmake` (`P3P_AOT_UNIT_COUNT` empty; load base `0x08804000` [INFERRED] PSP user default), `bootstrap_expectations.hpp` (all checkpoint values 0; root stack `0x0A000000`/64 KiB [INFERRED] from P3P), `profile_info.hpp` (`elf_sha256` empty), `p1p_functions.csv` (`module_start`/`user_main` commented). `p3p_pc_bootstrap_smoke` is not registered while `P3P_PROFILE_BOOTSTRAP_VERIFIED` is OFF.
+- [UNVERIFIED] Whether Persona's EBOOT uses the encryption tag `0xD91613F0` known to `prepare_game.py` and the Builder.
+- P3P-only fixtures left untouched for mergeability: `tests/test_hle_graphics.cpp` (reset-list check) and `tests/test_modulemgr.cpp` read `profiles/p3p/game/eboot.elf` and therefore always skip those checks; `experiments/p3p-analysis/` is upstream analysis of ULUS-10512.
+
+Immediate blocker: no decrypted Persona EBOOT has been measured. Next task: decrypt and prepare the ISO on the maintainer's PC, list the imports (`psp_analyze`, `tools/name_imports.py`) against the services in `core/src/hle/`, measure the AOT unit count with `psp_recomp --auto`, then run the PC runner to its first blocker.
 
 ## GE back end on core 2 (2026-10-11)
 
