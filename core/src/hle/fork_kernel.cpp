@@ -102,6 +102,17 @@ std::string describe_subintr(std::uint32_t intno, std::uint32_t no, std::uint32_
            psprecomp::hex32(handler) + ", arg " + psprecomp::hex32(arg) + ") is not modelled yet";
 }
 
+std::uint32_t mpeg_avc_ycbcr_size_mode1(std::uint32_t width, std::uint32_t height) noexcept {
+    if ((width & 15u) != 0u || (height & 15u) != 0u || width <= 16u || width > 480u || height == 0u || height > 272u) return 0u;
+    return 128u + (width / 2u) * (height / 2u) * 6u;
+}
+
+std::string describe_ycbcr_query(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width, std::uint32_t height,
+                                 std::uint32_t result) {
+    return "sceMpegAvcQueryYCbCrSize(mpeg " + psprecomp::hex32(mpeg) + ", mode " + std::to_string(mode) + ", " +
+           std::to_string(width) + " x " + std::to_string(height) + ", out " + psprecomp::hex32(result) + ") is not modelled yet";
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -231,6 +242,19 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         rt.stop(describe_devctl(device, cmd, indata, inlen, outdata, outlen));
     });
 
+
+    // sceMpeg::0x211A057C - sceMpegAvcQueryYCbCrSize: mode 1 with valid dimensions, else report the call.
+    runtime.register_hle("sceMpeg", 0x211A057Cu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t mode = ctx.gpr[5], width = ctx.gpr[6], height = ctx.gpr[7], result = ctx.gpr[8];
+        const std::uint32_t size = mode == 1u ? mpeg_avc_ycbcr_size_mode1(width, height) : 0u;
+        if (size != 0u && m.contains(result, 4u)) {
+            m.store32(result, size);
+            ctx.set_gpr(2, 0u);
+            return;
+        }
+        rt.stop(describe_ycbcr_query(ctx.gpr[4], mode, width, height, result));
+    });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick
     runtime.register_hle("sceRtc", 0x6FF40ACCu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {

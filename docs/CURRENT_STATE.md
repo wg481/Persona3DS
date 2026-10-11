@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 13 and New 3DS run 3; blocker 10: sceMpegAvcQueryYCbCrSize (2026-10-11)
+
+- [VERIFIED] Blocker 9 is cleared on both targets: `sceKernelRegisterSubIntrHandler` returns and the game continues into its movie setup. PC run 13 (maintainer, `b4852c20`, CTest 28/28 on Windows, default input script): 1,784 frames, the ATLUS logo at frame 1,740 (PNG), the same audio as run 12. New 3DS run 3: 600 frames, 59.9 fps, 98 % of real time in the last 10 s.
+- [VERIFIED] Both stop at the missing import `sceMpeg::0x211A057C` (`sceMpegAvcQueryYCbCrSize`, stub `0x08981214`), called from `0x08811640` right after the two `sceMpegRegistStream`: `$a0 = 0x08CC268C` (the variable holding the handle `0x096988F0` from `sceMpegCreate`), `$a1 = 1`, `$a2`/`$a3` loaded from `0x08CC2668`/`0x08CC25DC`, `$t0 = $sp`. The game then branches on `$v0` (`beq $v0, $zero` at `0x08811648`).
+- [INFERRED] Persona decodes the movie to YCbCr (split mode) rather than through `sceMpegAvcDecode`. [UNVERIFIED] The next blockers are likely the other YCbCr calls (`sceMpegAvcInitYCbCr`, `sceMpegAvcDecodeYCbCr`, `sceMpegAvcDecodeStopYCbCr`, `sceMpegAvcCsc`); check them against the import list (`.tmp/p1/p1_imports_named.txt`). Upstream's sceMpeg decoder outputs black pictures, so the movie will play black.
+- Implementation in `core/src/hle/fork_kernel.cpp`: mode 1 with width and height multiples of 16 (16 < width <= 480, 0 < height <= 272) writes `128 + (width / 2) * (height / 2) * 6` and returns 0. [INFERRED] PPSSPP `sceMpeg.cpp` and JPCSP `sceMpeg.java` agree on this (read, not copied); there is no hardware `.expected`. Every other form stops and names its arguments, because the references disagree there.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: 480 x 272 gives 195,968; the bounds; Persona's call through the import table; mode 2 is reported. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
 ## Persona run 12 and New 3DS run 2; blocker 9: vblank sub-interrupt handler (2026-10-11)
 
 - [VERIFIED] PC run 12 (maintainer, START/CROSS input script, 5M dispatches; CTest 28/28 on Windows): the static screen of run 11 is passed. 1,784 frames (1,620 non-black), [VERIFIED] PNG: the ATLUS logo. First non-silent audio (2,775 buffers, 8,144 non-zero frames, peak 7,712). `sceMpegCreate` plus two `sceMpegRegistStream` (types 0 and 1), and `disc0:/sce_lbn0x4a8e0_size0x25c8000` (39 MB, [INFERRED] the intro movie) is opened. It then stops at `sceKernelRegisterSubIntrHandler(intno 30, no 0, handler 0x0881203C, arg 0x090DF380)` from `0x08980E54`.

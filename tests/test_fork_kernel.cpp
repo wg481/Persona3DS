@@ -351,6 +351,36 @@ void test_devctl_ms_free_space() {
         CHECK(static_cast<std::uint64_t>(size) * count * free < 0x100000000ull); // no 32-bit overflow in the game's mult
     }
 }
+
+// sceMpegAvcQueryYCbCrSize as Persona calls it (run 13: $a0 = 0x08CC268C,
+// mode 1, out = $sp); PPSSPP and JPCSP agree on mode 1 (see fork_kernel.hpp).
+void test_mpeg_ycbcr_size() {
+    using p3p3ds::hle::mpeg_avc_ycbcr_size_mode1;
+    CHECK(mpeg_avc_ycbcr_size_mode1(480u, 272u) == 195968u);  // 128 + 240 * 136 * 6
+    CHECK(mpeg_avc_ycbcr_size_mode1(464u, 256u) == 128u + 232u * 128u * 6u);
+    CHECK(mpeg_avc_ycbcr_size_mode1(496u, 272u) == 0u);       // too wide
+    CHECK(mpeg_avc_ycbcr_size_mode1(480u, 288u) == 0u);       // too tall
+    CHECK(mpeg_avc_ycbcr_size_mode1(480u, 270u) == 0u);       // not a multiple of 16
+    CHECK(mpeg_avc_ycbcr_size_mode1(16u, 272u) == 0u);        // references disagree
+    CHECK(mpeg_avc_ycbcr_size_mode1(480u, 0u) == 0u);
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kOut = 0x09FEF8F0u;
+    m.store32(kOut, 0xDEADBEEFu);
+    rt.cpu().set_gpr(4, 0x08CC268Cu); rt.cpu().set_gpr(5, 1u); rt.cpu().set_gpr(6, 480u);
+    rt.cpu().set_gpr(7, 272u); rt.cpu().set_gpr(8, kOut);
+    rt.invoke_import("sceMpeg", 0x211A057Cu, rt.cpu());
+    CHECK(!rt.stopped());
+    CHECK(rt.cpu().gpr[2] == 0u);
+    CHECK(m.load32(kOut) == 195968u);
+    rt.cpu().set_gpr(5, 2u); // other modes are not observed: reported, not guessed
+    rt.invoke_import("sceMpeg", 0x211A057Cu, rt.cpu());
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceMpegAvcQueryYCbCrSize(mpeg 0x08CC268C, mode 2, 480 x 272") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -389,6 +419,7 @@ int main() {
     test_devctl_fat_ready();
     test_subintr_results();
     test_subintr_dispatch();
+    test_mpeg_ycbcr_size();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

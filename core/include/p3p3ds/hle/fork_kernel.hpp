@@ -134,6 +134,21 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata,
                                           std::uint32_t inlen, std::uint32_t outdata, std::uint32_t outlen);
 
+// sceMpeg 0x211A057C sceMpegAvcQueryYCbCrSize(mpeg, mode, width, height, *size)
+// (signature: pspautotests video/mpeg/playertiming.c). Persona (PC run 13,
+// New 3DS run 3) calls it with mode 1 after sceMpegRegistStream. No hardware
+// .expected exists; [INFERRED] from the behaviour references (AGENTS.md
+// section 4; read, not copied), which agree for mode 1: width and height
+// multiples of 16, width <= 480, height <= 272, size = 128 + (width / 2) *
+// (height / 2) * 6 (480 x 272: 195,968), return 0 (PPSSPP sceMpeg.cpp; JPCSP
+// sceMpeg.java, with its two plane sizes summing to the same value). They
+// disagree on width <= 16 or height 0, on the other modes and on writing
+// *size on error, so those calls stop the run and name their arguments.
+// The mpeg handle is not checked [INFERRED: Persona passes the one it created].
+[[nodiscard]] std::uint32_t mpeg_avc_ycbcr_size_mode1(std::uint32_t width, std::uint32_t height) noexcept; // 0 = not modelled
+[[nodiscard]] std::string describe_ycbcr_query(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width,
+                                               std::uint32_t height, std::uint32_t result);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).
