@@ -476,6 +476,38 @@ void test_mpeg_decode_ycbcr() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceMpegAvcDecodeYCbCr(mpeg 0x08CC268C") != std::string::npos);
 }
+
+// sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
+// 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
+void test_mpeg_avc_csc() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kMpeg = 0x08CC268Cu, kData = 0x08A00000u, kRb = 0x08CC26ECu, kRange = 0x09FAE500u;
+    constexpr std::uint32_t kDest = 0x04088000u;
+    rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, kData); rt.cpu().set_gpr(6, 0x10000u); rt.cpu().set_gpr(7, kRb);
+    rt.invoke_import("sceMpeg", 0xD8C5F121u, rt.cpu()); // sceMpegCreate
+    CHECK(rt.cpu().gpr[2] == 0u);
+    auto csc = [&](std::uint32_t x, std::uint32_t y, std::uint32_t w, std::uint32_t h) {
+        m.store32(kRange, x); m.store32(kRange + 4u, y); m.store32(kRange + 8u, w); m.store32(kRange + 12u, h);
+        rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, 0x09000000u); rt.cpu().set_gpr(6, kRange);
+        rt.cpu().set_gpr(7, 512u); rt.cpu().set_gpr(8, kDest); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceMpeg", 0x31BD0272u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    for (std::uint32_t y = 0; y < 272u; y += 271u)
+        for (std::uint32_t x : {0u, 479u, 480u}) m.store32(kDest + (y * 512u + x) * 4u, 0x12345678u);
+    CHECK(csc(0u, 0u, 480u, 272u) == 0u);
+    CHECK(!rt.stopped());
+    CHECK(m.load32(kDest) == 0xFF000000u && m.load32(kDest + 479u * 4u) == 0xFF000000u);
+    CHECK(m.load32(kDest + (271u * 512u + 479u) * 4u) == 0xFF000000u);
+    CHECK(m.load32(kDest + 480u * 4u) == 0x12345678u);                // outside the range: untouched
+    CHECK(m.load32(kDest + (271u * 512u + 480u) * 4u) == 0x12345678u);
+    (void)csc(0u, 0u, 480u, 270u); // not a multiple of 16: reported
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceMpegAvcCsc(mpeg 0x08CC268C, source 0x09000000, range 0x09FAE500, frameWidth 512") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -518,6 +550,7 @@ int main() {
     test_mpeg_ycbcr_init();
     test_refer_event_flag();
     test_mpeg_decode_ycbcr();
+    test_mpeg_avc_csc();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

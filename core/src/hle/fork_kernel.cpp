@@ -7,6 +7,7 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -128,6 +129,13 @@ std::string describe_refer_event_flag(std::int32_t uid, std::uint32_t info, std:
 std::string describe_decode_ycbcr(std::uint32_t mpeg, std::uint32_t au, std::uint32_t buffer, std::uint32_t init) {
     return "sceMpegAvcDecodeYCbCr(mpeg " + psprecomp::hex32(mpeg) + ", au " + psprecomp::hex32(au) + ", buffer " +
            psprecomp::hex32(buffer) + ", init " + psprecomp::hex32(init) + ") is not modelled yet";
+}
+
+std::string describe_avc_csc(std::uint32_t mpeg, std::uint32_t source, std::uint32_t range, std::uint32_t frame_width,
+                             std::uint32_t dest) {
+    return "sceMpegAvcCsc(mpeg " + psprecomp::hex32(mpeg) + ", source " + psprecomp::hex32(source) + ", range " +
+           psprecomp::hex32(range) + ", frameWidth " + std::to_string(frame_width) + ", dest " + psprecomp::hex32(dest) +
+           ") is not modelled yet";
 }
 
 namespace {
@@ -324,6 +332,27 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         }
         m.store32(au + hle::mpeg::AuSize, 0u);
         m.store32(init, pictures);
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceMpeg::0x31BD0272 - sceMpegAvcCsc: the range in 8888, black (placeholder decoder).
+    runtime.register_hle("sceMpeg", 0x31BD0272u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t mpeg = ctx.gpr[4], source = ctx.gpr[5], range = ctx.gpr[6], stride = ctx.gpr[7], dest = ctx.gpr[8];
+        const auto report = [&] { rt.stop(describe_avc_csc(mpeg, source, range, stride, dest)); };
+        if (!m.contains(mpeg, 4u) || kernel.mpeg().find(m.load32(mpeg)) == nullptr || !m.contains(range, 16u)) return report();
+        const std::uint32_t x = m.load32(range), y = m.load32(range + 4u), w = m.load32(range + 8u), h = m.load32(range + 12u);
+        if (((x | y | w | h) & 15u) != 0u || w == 0u || h == 0u || w > 480u || h > 272u || x + w > stride || stride > 1024u)
+            return report();
+        const auto row_address = [&](std::uint32_t row) { return dest + ((y + row) * stride + x) * 4u; };
+        for (std::uint32_t row = 0; row < h; ++row)
+            if (m.raw_pointer(row_address(row), w * 4u) == nullptr) return report();
+        constexpr std::uint32_t kBlack = 0xFF000000u; // opaque, as BlankMpegDecoder
+        for (std::uint32_t row = 0; row < h; ++row) {
+            std::uint8_t *p = m.raw_pointer(row_address(row), w * 4u);
+            for (std::uint32_t i = 0; i < w; ++i) std::memcpy(p + i * 4u, &kBlack, 4u);
+            m.notify_vram_write(row_address(row), w * 4u);
+        }
         ctx.set_gpr(2, 0u);
     });
 

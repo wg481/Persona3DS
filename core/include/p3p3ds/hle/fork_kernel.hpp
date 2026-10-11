@@ -193,6 +193,26 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_decode_ycbcr(std::uint32_t mpeg, std::uint32_t au, std::uint32_t buffer,
                                                 std::uint32_t init);
 
+// sceMpeg 0x31BD0272 sceMpegAvcCsc(mpeg, source, range, frameWidth, dest).
+// Persona (PC run 17, New 3DS run 7) calls it on displayThread from
+// 0x088139C8: the SceMpeg pointer, one YCbCr buffer, range = $sp holding
+// {0, 0, width, height} (the same words as the size query), frameWidth 512,
+// dest = a VRAM base + index * 0x88000 (the double-buffered framebuffer).
+// No hardware .expected exists. [INFERRED] from the behaviour references
+// (read, not copied): PPSSPP converts the range into dest in the mpeg's
+// pixel mode (default 8888; Persona never calls sceMpegAvcDecodeMode and
+// displays an 8888 framebuffer with stride 512) and returns 0; JPCSP
+// requires x, y, width and height to be multiples of 16 (0x806101FE
+// otherwise) and reads the plane pointers from the sceMpegAvcInitYCbCr
+// header. The upstream decoder is a black placeholder, so the range is
+// filled with opaque black (0xFF000000, as BlankMpegDecoder does) and the
+// YCbCr buffer is not read. Neither reference's CSC delay is modelled.
+// Unmodelled forms (unknown handle, range not multiples of 16 or empty,
+// frameWidth 0 or smaller than x + width, dest rows outside guest memory)
+// stop the run and name the call.
+[[nodiscard]] std::string describe_avc_csc(std::uint32_t mpeg, std::uint32_t source, std::uint32_t range,
+                                           std::uint32_t frame_width, std::uint32_t dest);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).
