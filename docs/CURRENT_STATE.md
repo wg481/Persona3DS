@@ -2,6 +2,16 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona blocker 1: sceKernelSetCompiledSdkVersion500_550 (2026-10-11)
+
+- Observed (maintainer's run, previous entry): the first import Persona executes is `SysMemUserForUser::0x91DE343C`, a `jal` from `0x08804140` in module start; the run stopped there as a missing HLE import. The `$a0` value it passes has not been recorded yet.
+- Semantics [VERIFIED] uOFW `src/kd/sysmem/misc.c`, `sceKernelSetCompiledSdkVersion500_550` (NID from `src/kd/sysmem/exports.exp`): accepted when `(ver & 0xFFFF0000)` is `0x05000000` or `0x05050000`: sets game-info flag `0x1000`, returns 0. Any other version resets the hardware and never returns.
+- Implementation: `core/src/hle/fork_kernel.cpp` (new fork-owned file, registered by one call in `hle_modules.cpp`, listed in `cmake/p3p3ds_sources.cmake`). An accepted version is recorded with `KernelState::set_compiled_sdk_version` (which sets flag `0x1000`, as the upstream 600_620 handler does) and `$v0 = 0`; any other version stops the run with a reason naming the call instead of emulating the reset.
+- [VERIFIED] `tests/test_fork_kernel.cpp` (CTest `p3p_fork_kernel`): five accepted versions (0x0500xxxx, 0x0505xxxx) recorded with `$v0 = 0`, through the direct function and through `invoke_import`; six rejected versions (including 6.20 and 5.10) stop the runtime and record nothing. It fails with 21 failures when the registration is removed. Host CTest 25/25 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona: the guest return path, the version Persona passes and the next blocker need the maintainer's PC run (no game data here). The 3DS build of the new file was not compiled here (no devkitPro).
+
+Next task: the maintainer's PC run with the same options as the first run; record the next blocker (another of the 41 remaining imports, or something else) and the version recorded by this call.
+
 ## p3p_mpeg: pspautotests re-recording (2026-10-11)
 
 - [VERIFIED] Reproduced on Linux (GCC 13) with a fresh pspautotests clone: `basic.expected lines compared=2905 mismatches=180`, every mismatch `sceMpegGetAtracAu: 80618001 (at 00000000)` vs `(at 00040800)`. Pre-existing upstream: `core/`, `recomp/` and `tests/test_mpeg.cpp` are identical to upstream (`git diff master..p1-retarget` empty for them), and pspautotests commit `d66aeae` (2026-10-10, "re-record basic") rebuilt `basic.prx` and changed exactly those 180 lines after upstream's last `test_mpeg.cpp` change (2026-10-02).

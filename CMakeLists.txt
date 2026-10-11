@@ -325,6 +325,11 @@ if(P3P_HAVE_GAME AND P3P_AOT_MODE STREQUAL "AUTO")
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" SKIP_RETURN_CODE 77)
 endif()
 
+# Persona3DS fork: kernel imports in core/src/hle/fork_kernel.cpp.
+add_executable(test_fork_kernel tests/test_fork_kernel.cpp)
+target_link_libraries(test_fork_kernel PRIVATE p3p3ds_core)
+add_test(NAME p3p_fork_kernel COMMAND test_fork_kernel)
+
 add_executable(test_threadman_sync tests/test_threadman_sync.cpp)
 target_link_libraries(test_threadman_sync PRIVATE p3p3ds_core)
 add_test(NAME p3p_threadman_sync COMMAND test_threadman_sync)
