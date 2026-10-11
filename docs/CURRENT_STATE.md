@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 23: the title menu on PC; renderer gap on the 3DS (2026-10-11)
+
+- [VERIFIED] PC run 23 (`726b48e7`, `new_game.txt` probe, 30M dispatches, stopped at vblank 9000): the PC renders the full title screen ("Persona", "PRESS ANY BUTTON", "(c) 1996, 2009 ATLUS") and the menu NEW GAME / LOAD GAME / CONTINUE / MOVIE MODE with the cursor on LOAD GAME and a "Load a saved game ... (X) Confirm" help bar (PNGs of frames 2,280-3,120). The probe's UP came too early (the title waits for a button until about vblank 1500); the CROSS at 1500 opened the menu and the START at 1590 confirmed LOAD GAME. The Load Game screen then looped: 279 savedata list operations and 278 MsgDialogs "Cancel load?" (mode 1, options 0x111 = text + yes/no + default No), each auto-confirmed with No by the fork's MsgDialog ([INFERRED] the later START presses opened the dialog each time). The MsgDialog logging and default-button answer work as designed.
+- [VERIFIED] Maintainer: New Game is above Load Game. `profiles/p1p/input/new_game.txt` rewritten from the observed timing: CROSS at 1500 (any button), UP at 1560, CROSS at 1620, then CROSS every 120 vblanks.
+- [VERIFIED] Maintainer: on the New 3DS the same title screen misses much of what the PC draws and runs at 11.1 fps. The PC output is complete, so the gap is in the 3DS renderer path (`platform/3ds/gpu_renderer.*`), not in the game logic or HLE.
+
 ## Milestone: Persona is playable from New Game on the New 3DS (2026-10-11)
 
 - [VERIFIED] Maintainer's New 3DS run 13 (current code; report label stale): the title menu's cursor starts on Load Game; choosing New Game starts the game. The opening text appears, briefly turns into boxes, then displays correctly; after that the game is in play: cast, dialogue, at what the maintainer describes as about 60 fps. Report: 22,372 frames, 378.2 s of guest time in 398.4 s wall (95 % of real time; 99 % in the last 10 s, 59.9 fps), 1,187,050 draws, 1,631 texture uploads in total, no failed allocation. The run was quit by hand on a black screen.
