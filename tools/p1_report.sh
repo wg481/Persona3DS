@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # One-file report of a Persona PC run, for the maintainer to upload.
-#   bash tools/p1_report.sh <run number> [max dispatches] [iso]
+#   bash tools/p1_report.sh <run number> [max dispatches] [iso] [input script]
 # Pulls p1-retarget, builds, runs CTest and the PC runner (frames every 60
 # vblanks), summarizes the events, disassembles the code before the last
-# transfer and converts frames 120 and 300 to PNG. Everything textual goes to
+# transfer and converts frames 120 and 300 and the last frame to PNG. An input
+# script (core/include/p3p3ds/input.hpp format) is passed as --input. Everything textual goes to
 # .tmp/p1/report<N>.txt; the PNGs stay in .tmp/p1/frames<N>/.
 set -u
 N=${1:?run number}
 DISPATCHES=${2:-5000000}
 ISO=${3:-$(ls *.iso 2>/dev/null | head -1)}
+INPUT=${4:-}
+INPUT_ARGS=()
+[ -n "$INPUT" ] && INPUT_ARGS=(--input "$INPUT")
 OUT=.tmp/p1
 R=$OUT/report$N.txt
 mkdir -p "$OUT"
@@ -20,8 +24,8 @@ mkdir -p "$OUT"
   cmake --build build 2>&1 | grep -E " error|FAILED" || echo "build OK"
   echo; echo "=== ctest ==="
   ctest --test-dir build 2>&1 | tail -12
-  echo; echo "=== run $N: $ISO, $DISPATCHES dispatches ==="
-  ./build/p3p_pc_bootstrap --umd "$ISO" --run-until-blocker --max-dispatches "$DISPATCHES" \
+  echo; echo "=== run $N: $ISO, $DISPATCHES dispatches, input: ${INPUT:-none} ==="
+  ./build/p3p_pc_bootstrap --umd "$ISO" --run-until-blocker --max-dispatches "$DISPATCHES" "${INPUT_ARGS[@]}" \
       --frames-dir "$OUT/frames$N" --frame-every 60 --dump-events "$OUT/run$N.json" > "$OUT/run$N.txt" 2>&1
   grep -aE "Stop Reason|Final Guest PC|Blocker type|Last executed transfer|\[AUDIO\]|\[THREAD|\[INTERPRETER\]" "$OUT/run$N.txt"
   echo; echo "=== event summary ==="
@@ -36,6 +40,8 @@ mkdir -p "$OUT"
   python .claude/skills/p3p-run-triage/scripts/frames_to_png.py "$OUT/frames$N"
   python .claude/skills/p3p-run-triage/scripts/frames_to_png.py "$OUT/frames$N" 120
   python .claude/skills/p3p-run-triage/scripts/frames_to_png.py "$OUT/frames$N" 300
+  LAST=$(ls "$OUT/frames$N" | grep -oE "frame_[0-9]+\.bmp" | sort | tail -1 | grep -oE "[0-9]+" | sed 's/^0*//')
+  [ -n "$LAST" ] && python .claude/skills/p3p-run-triage/scripts/frames_to_png.py "$OUT/frames$N" "$LAST"
 } > "$R" 2>&1
 echo "wrote $R"
 ls "$OUT/frames$N"/*.png 2>/dev/null

@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## First New 3DS run; PC run 11 reaches a static screen (2026-10-11)
+
+- [VERIFIED] **First run on a New 3DS** (maintainer, build `bc9add68`, `sdmc:/persona3ds/report.txt`): the `.3dsx` built from the Persona profile starts, mounts `sdmc:/persona3ds/Shin Megami Tensei - Persona (USA).iso`, renders 591 frames in 11.1 s of guest time (12.5 s wall): 59.9 game frames/s, 89 % of real time overall, 98-99 % in the last 10 s, 74 % idle. Second core: `core2 ok, parallel x1.98, GE on core2`. GPU: 5,150 draws, 10,300 triangles, 589 GPU presents. Memory: app region 126,976 KiB, all taken by the heap (93,748 KiB, 51,534 KiB in use), linear free 6,605 KiB, no failed allocation. It stops at `Missing HLE import InterruptManager::0xCA04A2B9` (`sceKernelRegisterSubIntrHandler`).
+- [VERIFIED] PC run 11 (5M dispatches, same build): blocker 8 is cleared. No import is missing; the run ends on the dispatch budget after 9,912 frames / 83.9 s of virtual time. `frames_to_png.py` reports no picture change after frame 540 (~9 s), and every later frame has the same hash (`B0D203D26FE97650`, 13,411 non-black pixels). 4,958 GE lists, 639,149 `sceGeListUpdateStallAddr`, audio still silent. `InterruptManager` is never called on the PC.
+- Open question [UNVERIFIED]: why the 3DS reaches `sceKernelRegisterSubIntrHandler` (at ~591 frames, about where the PC picture freezes) while the PC does not. Candidates: different host timing of GE completion (GE on core 2), the 3DS movie/ms0 defaults, or input. The next PC run uses an input script (START presses) and dumps the last frame to see what the static screen is.
+- `tools/p1_report.sh` takes an optional input script (4th argument) and also converts the last frame to PNG.
+
 ## Persona run 10 and blocker 8: sceIoDevctl("fatms0:", 0x02425823) (2026-10-11)
 
 Maintainer's PC (clone at `efa1bfb3`), 5M dispatches.
