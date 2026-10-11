@@ -2,16 +2,17 @@
 
 **Persona3DS** is a fork of [P3P3DS](https://github.com/endercodezz/P3P3DS) by enderlit aka endercodezz, retargeted from *Persona 3 Portable* to ***Shin Megami Tensei: Persona*** (the 2009 PSP remake of the first Persona, North American release `ULUS-10432`). The goal is the same as upstream's: run the game natively on the **New Nintendo 3DS / New 3DS XL / New 2DS XL** by statically recompiling the PSP's MIPS code to C++ ahead of time and replacing the PSP operating system, graphics and audio with a high-level runtime.
 
-All the engineering (the static recompiler, the PSP HLE runtime, the GE-to-PICA200 renderer, NDSP audio, the PC runner and the Builder) comes from P3P3DS. This fork only adds a selectable game profile and the Persona profile, so that upstream fixes can still be merged with `git merge`.
+The engineering base (the static recompiler, the PSP HLE runtime, the GE-to-PICA200 renderer, the PC runner and the Builder) comes from P3P3DS. This fork adds a selectable game profile and the Persona profile, the PSP services Persona needs beyond P3P (`core/src/hle/fork_*.cpp`), music and movies converted ahead of time with the user's ffmpeg, sound output on the 3DS (NDSP), movie decoding on the New 3DS hardware H.264 decoder (MVD), and a few marked renderer patches. Fork code lives in its own files where possible, so upstream fixes can still be merged with `git merge`.
 
-## Status: does not boot yet
+## Status: playable from New Game, movies being finished
 
-- [VERIFIED] The host runtime, tools, Builder and tests build and pass without game data (Linux, GCC 13; `ctest` 24/24 with 3 skipped tests that need game data or reference clones).
-- [VERIFIED] (maintainer's PC, 2026-10-11) The PPSSPP-decrypted EBOOT generates 153 AOT units, the PC runner builds and starts at `0x08804114`, and stops at the first SDK call in module start: `SysMemUserForUser::0x91DE343C` (`sceKernelSetCompiledSdkVersion500_550`). 42 of the game's 193 imports have no HLE yet. Details and the current frontier: [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md).
+- [VERIFIED] PC: boots through the logos and title screen into New Game and gameplay; music and movies (pictures and sound) play from the converted media.
+- [VERIFIED] New Nintendo 3DS (maintainer's hardware): title screen, menus and gameplay at about 60 fps with sound. Movies decode on the hardware H.264 decoder but still ran at about 50-60 % of real time, and a fix for their flicker (every other frame black) is not yet confirmed on hardware.
+- Known issues: noise boxes during the ATLUS logo and disclaimer fades on the 3DS (possibly fixed by the same renderer change as the movie flicker); New Game starts on Load Game's cursor position, so input scripts press UP first.
 - [VERIFIED] Persona's EBOOT uses encryption tag `0xD9160BF0`, which the built-in decryptor does not support (it knows P3P's `0xD91613F0`). Decrypt it with PPSSPP's decrypted EBOOT dump and pass it with `--decrypted-eboot`. The Builder cannot build this game yet.
 - Measured values and remaining placeholders (`TODO`): [`profiles/p1p/README.md`](profiles/p1p/README.md).
 
-The verified frontier and its history are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md) (the older entries describe upstream's P3P work).
+The verified frontier, the open problems and the latest handoff notes are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md), newest first (the older entries describe upstream's P3P work).
 
 ## Game profiles
 
@@ -37,6 +38,8 @@ cmake -S platform/3ds -B build/3ds ... -DP3P_PROFILE_DIR=profiles/p1p   # same v
 - CMake 3.20+, Ninja, a C++20 compiler (built here with GCC 13; upstream CI uses GCC 14), Python 3.11+ (standard library only; `tomllib`).
 - For the New 3DS build: [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS packages.
 - Your own *Shin Megami Tensei: Persona* `ULUS-10432` ISO. ISO MD5 `c75f75b0f1e92d7cca77d75585bebd82` ([VERIFIED] on the maintainer's copy).
+- Optional, for music and movies: your own ffmpeg (with ffprobe and libx264); for movies on the PC runner also the libavcodec development files found through pkg-config. In MSYS2 UCRT64: `pacman -S mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-pkgconf`, then reconfigure (`cmake -S . -B build` prints `Converted movies on PC: libavcodec ...`).
+- For sound on the 3DS: the DSP firmware dump `sdmc:/3ds/dspfirm.cdc` (made once with the DSP1 homebrew, as for any homebrew with sound).
 
 ## Game setup
 
@@ -46,6 +49,16 @@ python tools/prepare_game.py "<your Persona ISO>" --decrypted-eboot <PPSSPP dump
 ```
 
 It checks `PARAM.SFO` (`ULUS10432`) and the ISO MD5, verifies the decrypted EBOOT against the profile's SHA-256 (of PPSSPP's dump), writes it to `profiles/p1p/game/eboot.elf` and extracts `USRDIR/`. Game files never enter the repository.
+
+## Music and movies
+
+The game's ATRAC3plus music and PSMF movies are converted once on your PC, with your own ffmpeg; nothing is downloaded:
+
+```bash
+python tools/convert_media.py               # after prepare_game.py; --skip-movies converts music only
+```
+
+It writes `profiles/p1p/game/media/` (gitignored): music as IMA-ADPCM WAV, movies as H.264 Baseline streams with a frame index plus IMA-ADPCM audio, and `index.txt`, which matches each file to the game's data by a hash of its header. Already converted files are skipped; converting all 44 movies takes a while. The runtime then plays the converted music and movies where the game would decode its own (`core/include/p3p3ds/hle/fork_media.hpp`, `fork_movie.hpp`). Without converted media the game runs with silent music and black movies.
 
 ## Build
 
@@ -64,7 +77,19 @@ cmake -S platform/3ds -B build/3ds -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=$D
 make -C build/3ds
 ```
 
-On the SD card: `/3ds/p3p3ds.3dsx` (CMake target name kept from upstream; the Builder names it `persona3ds.3dsx`) and your ISO in `/persona3ds/`. The `.3dsx` embeds code generated from your game executable: it is for your own use, never for distribution.
+On the SD card:
+
+| Path | What |
+|---|---|
+| `/3ds/p3p3ds.3dsx` | the app (CMake target name kept from upstream; the Builder names it `persona3ds.3dsx`) |
+| `/persona3ds/<your ISO>.iso` | the game |
+| `/persona3ds/media/` | a copy of `profiles/p1p/game/media/` (music and movies; optional) |
+| `/3ds/dspfirm.cdc` | DSP firmware dump, needed for sound |
+| `/persona3ds/report.txt` | written by the app on exit (START+SELECT): speed, memory, sound, music, movie and renderer counters |
+
+Optional switch files in `/persona3ds/` (create an empty file to turn one on): `no_gpu_thread.txt` (graphics on the main core instead of core 2), `dump_every.txt` (contains N: saves every Nth vblank as a BMP to `/persona3ds/frames/`, slow), `draw_trace.txt` (logs the renderer's draws of a few movie frames to `draw_trace_out.txt`), `play_movies.txt` (no automatic START presses through unconverted movies).
+
+The `.3dsx` embeds code generated from your game executable: it is for your own use, never for distribution.
 
 ## Run on PC
 
@@ -74,6 +99,14 @@ On the SD card: `/3ds/p3p3ds.3dsx` (CMake target name kept from upstream; the Bu
 
 The runner prints why it stopped (missing HLE service, unsupported instruction, missing function, fault or budget). Options are listed in `platform/pc/main.cpp` and in upstream's README; `--verify-bootstrap` needs measured `bootstrap_expectations.hpp` values.
 
+A full report run (pull, build, tests, run with an input script, event summary and PNGs of the distinct screens):
+
+```bash
+bash tools/p1_report.sh <run number> 30000000 "<your ISO>" profiles/p1p/input/new_game.txt 6000
+```
+
+It stops by itself at the given vblank (6000 = about 100 s of game time) and writes `.tmp/p1/report<N>.txt` and `.tmp/p1/frames<N>/`. Input scripts in `profiles/p1p/input/`: `new_game.txt` (title, New Game, then confirms through the opening), `to_title.txt` (stops pressing at the title; the attract movie plays), `boot_presses.txt`. `--wav <file>` records the sound, `--draw-log <file> --draw-log-from <frame>` logs the GE draws of a frame.
+
 ## Merging upstream
 
 ```bash
@@ -82,7 +115,7 @@ git fetch upstream
 git merge upstream/master
 ```
 
-[INFERRED] Upstream changes to `core/`, `recomp/PSPRecomp/`, the renderer and the PC runner should merge without conflicts, because this fork only touched them for profile wiring (a few lines in `platform/pc/main.cpp`, `platform/pc/telemetry.hpp`, `platform/3ds/main.cpp`, the Builder and both `CMakeLists.txt`). Upstream changes to the deleted P3P files (`profiles/p3p/`, `p3p/p3p-patches/`, the `p3p-modding-vfs` skill) show up as modify/delete conflicts: keep them deleted (`git rm <path>`), and port anything generic into `profiles/p1p/` by hand.
+[INFERRED] Upstream changes to `core/`, `recomp/PSPRecomp/`, the renderer and the PC runner should mostly merge without conflicts: the fork's code is in its own files (`core/src/hle/fork_*.cpp`, `core/src/fork_vfs.cpp`, `platform/pc/fork_avcodec.cpp`, `platform/3ds/fork_mvd.hpp`, `platform/3ds/fork_ndsp.hpp`, `tools/convert_media.py`) plus wiring lines in `platform/pc/main.cpp`, `platform/pc/telemetry.hpp`, `platform/3ds/main.cpp`, `core/src/hle/hle_modules.cpp`, the Builder and both `CMakeLists.txt`. `platform/3ds/gpu_renderer.*` carries a few patches marked `P3P3DS:` and listed in `docs/CURRENT_STATE.md`; expect conflicts there if upstream changes the same lines. Upstream changes to the deleted P3P files (`profiles/p3p/`, `p3p/p3p-patches/`, the `p3p-modding-vfs` skill) show up as modify/delete conflicts: keep them deleted (`git rm <path>`), and port anything generic into `profiles/p1p/` by hand.
 
 ## Documentation
 
