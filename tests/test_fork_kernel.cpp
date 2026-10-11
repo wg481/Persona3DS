@@ -508,6 +508,38 @@ void test_mpeg_avc_csc() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceMpegAvcCsc(mpeg 0x08CC268C, source 0x09000000, range 0x09FAE500, frameWidth 512") != std::string::npos);
 }
+
+// sceKernelTerminateDeleteThread: pspautotests threads/threads/terminate
+// (hardware), and Persona's call on its exited movie threads (run 18).
+void test_terminate_delete_thread() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &tm = kernel.threads();
+    const auto root = tm.init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    auto call = [&](std::int32_t uid) {
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(uid));
+        rt.invoke_import("ThreadManForUser", 0x383F7BCCu, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    const auto created = tm.create_thread("created", 0x08900000u, 0x20, 0x1000u, 0u, 0u, rt.memory());
+    CHECK(call(created) == 0u);                          // Created: 00000000
+    CHECK(tm.get_thread(created) == nullptr);
+    CHECK(call(created) == 0x80020198u);                 // Deleted: 80020198
+    const auto finished = tm.create_thread("readThread", 0x0881329Cu, 64, 0x800u, 0u, 0u, rt.memory());
+    tm.get_thread(finished)->status = p3p3ds::hle::InternalThreadState::Stopped; // as after sceKernelExitThread
+    CHECK(call(finished) == 0u);                         // Finished: 00000000
+    CHECK(tm.get_thread(finished) == nullptr);
+    CHECK(call(-1) == 0x80020198u && call(0x7FFFFFFF) == 0x80020198u); // -1, Invalid
+    CHECK(call(0) == 0x80020197u && call(root) == 0x80020197u);         // Zero, Current
+    CHECK(!rt.stopped());
+    const auto ready = tm.create_thread("ready", 0x08900000u, 0x40, 0x1000u, 0u, 0u, rt.memory());
+    tm.get_thread(ready)->status = p3p3ds::hle::InternalThreadState::Ready;
+    (void)call(ready);                                   // live thread: reported
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceKernelTerminateDeleteThread(uid " + std::to_string(ready)) != std::string::npos);
+    CHECK(tm.get_thread(ready) != nullptr);
+}
 } // namespace
 
 int main() {
@@ -551,6 +583,7 @@ int main() {
     test_refer_event_flag();
     test_mpeg_decode_ycbcr();
     test_mpeg_avc_csc();
+    test_terminate_delete_thread();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

@@ -138,6 +138,11 @@ std::string describe_avc_csc(std::uint32_t mpeg, std::uint32_t source, std::uint
            ") is not modelled yet";
 }
 
+std::string describe_terminate_delete(std::int32_t uid, std::uint32_t status) {
+    return "sceKernelTerminateDeleteThread(uid " + std::to_string(uid) + ", internal state " + std::to_string(status) +
+           ") on a live thread is not modelled yet";
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -354,6 +359,19 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             m.notify_vram_write(row_address(row), w * 4u);
         }
         ctx.set_gpr(2, 0u);
+    });
+
+    // ThreadManForUser::0x383F7BCC - sceKernelTerminateDeleteThread: dormant threads, else report the call.
+    runtime.register_hle("ThreadManForUser", 0x383F7BCCu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &tm = kernel.threads();
+        const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+        const auto *t = tm.get_thread(uid);
+        if (uid != 0 && uid != tm.current_thread_id() && t != nullptr && t->status != hle::InternalThreadState::Dormant &&
+            t->status != hle::InternalThreadState::Stopped) {
+            rt.stop(describe_terminate_delete(uid, static_cast<std::uint32_t>(t->status)));
+            return;
+        }
+        ctx.set_gpr(2, static_cast<std::uint32_t>(tm.delete_thread(uid)));
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

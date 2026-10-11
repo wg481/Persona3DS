@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 18 and New 3DS run 8: intro movie ends; blocker 15: sceKernelTerminateDeleteThread (2026-10-11)
+
+- [VERIFIED] Blocker 14 is cleared and the intro movie runs to its end on both targets. PC run 18 (maintainer, `0b958fef`, CTest 28/28 on Windows): `readThread`, `displayThread` and `soundThread` all exit with status 0; 2,248 frames (the movie frames are black, the expected placeholder output); 248 vblank handler calls (now also on threads 9 and 20); 119 ringbuffer fills; 1,096 draws with 8888 textures appear for the first time (`tex_8888`, [INFERRED] the movie frame presented through the GE). New 3DS run 8: 817 frames, 56.0 fps overall, 98 % of real time in the last 10 s; linear memory free drops from 6,605 to 4,557 KiB ([INFERRED] the 8888 movie textures); input `00000008` (START) was held at the stop; no failed allocation.
+- [VERIFIED] Both then stop at the missing import `ThreadManForUser::0x383F7BCC` (`sceKernelTerminateDeleteThread`, stub `0x08980FF4`), called by `user_main` from `0x088153D4` with `$a0 = *0x08AF6DE8`, after waiting on the player threads (three calls to stub `0x08981054` from `0x0881539C`..`0x088153B8`).
+- Semantics: [VERIFIED] pspautotests `threads/threads/terminate.expected` (hardware): -1, invalid or deleted id give `0x80020198`; 0 or the current thread `0x80020197`; created or finished threads give 0 and are deleted; ready, waiting and suspended threads also give 0 but are terminated (their waiters wake with `0x800201AC`).
+- Implementation in `core/src/hle/fork_kernel.cpp`: upstream's `ThreadManager::delete_thread`, which gives exactly those results for dormant and exited threads. A live target is not observed, so it stops and names the call.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: created, finished (Stopped, as after `sceKernelExitThread`), deleted, -1, invalid, zero and current as in the hardware table; a ready thread is reported and kept. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
 ## Persona run 17 and New 3DS run 7; blocker 14: sceMpegAvcCsc (2026-10-11)
 
 - [VERIFIED] Blocker 13 is cleared on both targets: `sceMpegAvcDecodeYCbCr` returned and the movie player handed a frame to its display thread. PC run 17 (maintainer, `d437dc0f`, CTest 28/28 on Windows): 1,972 frames, 95 vblank handler calls, 48 ringbuffer fills. New 3DS run 7: 743 frames, 59.3 fps, 99 % of real time in the last 10 s, no failed allocation.

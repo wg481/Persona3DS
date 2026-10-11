@@ -213,6 +213,18 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_avc_csc(std::uint32_t mpeg, std::uint32_t source, std::uint32_t range,
                                            std::uint32_t frame_width, std::uint32_t dest);
 
+// ThreadManForUser 0x383F7BCC sceKernelTerminateDeleteThread(thid).
+// Persona (PC run 18, New 3DS run 8) calls it from 0x088153D4 after the
+// intro movie, on its player threads, which have already exited. Results
+// [VERIFIED] pspautotests threads/threads/terminate.expected (hardware):
+// -1, invalid or deleted -> 0x80020198; 0 or the current thread ->
+// 0x80020197; created (never started) or finished -> 0 and deleted. These
+// are upstream's ThreadManager::delete_thread results for a dormant thread.
+// Ready, waiting and suspended threads also give 0 on hardware, but that
+// terminates a live thread (its waiters wake with 0x800201AC); not observed,
+// so those stop the run and name the call.
+[[nodiscard]] std::string describe_terminate_delete(std::int32_t uid, std::uint32_t status);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).
