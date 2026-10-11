@@ -57,10 +57,10 @@ Follow this linear sequence:
 
 ### 2.1. Current P3P3DS pipeline (what the build actually does)
 
-- Default `P3P_AOT_MODE=AUTO`: `tools/cwcheat_patches.py` → patch list → `psp_recomp <elf> --auto build/generated/auto 0x08804000 16384 patches.txt [--no-transfer-records]` → `tools/verify_aot_layout.py`. Layout is pinned in `profiles/p3p/config/aot_layout.cmake`: **237 units × 16 KiB** + registry (16 KiB, not 256 KiB: the largest unit already needs 21 s / 570 MiB at `-O2`).
+- Default `P3P_AOT_MODE=AUTO`: `tools/cwcheat_patches.py` → patch list → `psp_recomp <elf> --auto build/generated/auto 0x08804000 16384 patches.txt [--no-transfer-records]` → `tools/verify_aot_layout.py`. Layout is pinned in `<P3P_PROFILE_DIR>/config/aot_layout.cmake` (P3P upstream: **237 units × 16 KiB** + registry (16 KiB, not 256 KiB: the largest unit already needs 21 s / 570 MiB at `-O2`); Persona's count is a TODO until measured.
 - PCs without an AOT entry run through the interpreter fallback (`core/src/interpreter.cpp`, semantics mirrored from `codegen_main.cpp`); seeds are no longer chased by hand.
 - Any lowering change must keep `tests/test_interpreter_diff.cpp` at 0 mismatches (AOT vs interpreter on 1,200 cases) and `experiments/p3p-analysis/verify_decoder.cpp` ground truths (912,808 lowerable, 0 decoded-but-unlowered, 251 BREAK); then re-prove the game replay with the `p3p-run-triage` skill. A codegen change that should not alter behaviour must reproduce the previous replay SHA-256 exactly.
-- Hardware check of instruction semantics: `python tools/run_autotests.py` runs every pspautotests CPU/FPU/VFPU program through `build/p3p_autotest` (interpreter = shared codegen helpers) and compares with `tests/autotest_baseline.txt`; a single program: `build/p3p_autotest.exe references/pspautotests/tests/cpu/vfpu/vrot.prx` prints the differing lines. After fixing semantics, run with `--update` and commit the improved baseline. `build/mnemonic_histogram.exe profiles/p3p/game/eboot.elf v cvt` shows whether P3P uses an instruction at all.
+- Hardware check of instruction semantics: `python tools/run_autotests.py` runs every pspautotests CPU/FPU/VFPU program through `build/p3p_autotest` (interpreter = shared codegen helpers) and compares with `tests/autotest_baseline.txt`; a single program: `build/p3p_autotest.exe references/pspautotests/tests/cpu/vfpu/vrot.prx` prints the differing lines. After fixing semantics, run with `--update` and commit the improved baseline. `build/mnemonic_histogram.exe profiles/p1p/game/eboot.elf v cvt` shows whether the game uses an instruction at all.
 - `codegen_main.cpp` has mixed CRLF/LF line endings: edit it byte-exactly (`p3p3ds-commit` skill, section 3) and comment each patch `P3P3DS:`.
 - `--no-transfer-records` drops the per-branch `rt.record_transfer` diagnostics (PC: −9.6 % text, −17 % run time, identical output); keep it ON for frontier tooling.
 
@@ -73,7 +73,7 @@ When the recompiler encounters an unsupported opcode or malformed basic block:
    - Cross-check against `psp/ghidra-allegrex` and `references/ppsspp/Core/MIPS/MIPSDis.cpp`.
 3. **Isolate the function:** Create a minimal standalone microtest in `experiments/`.
 4. **Determine root cause:** Is it a jump table index miscalculation, misidentified data embedded in `.text`, or an unhandled VFPU prefix register?
-5. **Patch the recompiler or profile config:** Store game-specific jump table hints in `profiles/p3p/config/p3p_functions.csv`. *Never hand-edit generated `unit_*.cpp` files.*
+5. **Patch the recompiler or profile config:** Store game-specific jump table hints in the profile's `config/*_functions.csv` (`profiles/p1p/config/p1p_functions.csv`). *Never hand-edit generated `unit_*.cpp` files.*
 
 ---
 

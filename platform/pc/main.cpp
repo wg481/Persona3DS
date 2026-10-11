@@ -88,7 +88,7 @@ int main(int argc,char **argv) {
         psprecomp::Runtime rt;
         const auto reloc=elf.load_and_relocate(rt.memory());
         // Profile CWCheat patches baked into the generated AOT (see
-        // profiles/p3p/config/cwcheat_patches.txt) must also patch the image.
+        // <P3P_PROFILE_DIR>/config/cwcheat_patches.txt) must also patch the image.
         psprecomp::apply_generated_patches(rt.memory());
         const auto module=elf.find_module_info(rt.memory());
         if(!module)throw std::runtime_error("missing module info");
