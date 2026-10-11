@@ -4,6 +4,7 @@
 // that upstream P3P3DS changes keep merging; drop an entry here if upstream
 // implements the same NID.
 #include <cstdint>
+#include <string>
 
 namespace psprecomp {
 class Runtime;
@@ -97,6 +98,16 @@ inline constexpr std::uint64_t kForkRtcEpochSeconds = 1199145600u; // = utils.cp
 // kernel-space tick pointer from user mode returns 0x80000023.
 [[nodiscard]] bool psp_date_time_valid(const PspDateTime &t) noexcept;
 [[nodiscard]] std::uint64_t psp_tick(const PspDateTime &t) noexcept; // valid dates only
+
+// IoFileMgrForUser::0x54F5FB11
+// int sceIoDevctl(const char *dev, unsigned int cmd, void *indata, int inlen,
+//                 void *outdata, int outlen);   (uOFW src/kd/iofilemgr/iofilemgr.c)
+// Device-specific: what a command does depends on the device driver. Not
+// modelled yet: the call stops the run and names the device, command and
+// buffers, so the next run shows which command Persona needs (AGENTS.md
+// section 6: the observed call first, then its semantics).
+[[nodiscard]] std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata,
+                                          std::uint32_t inlen, std::uint32_t outdata, std::uint32_t outlen);
 
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);
 

@@ -91,7 +91,21 @@ std::uint64_t psp_tick(const PspDateTime &t) noexcept {
     return seconds * 1000000u + t.microsecond;
 }
 
+std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata, std::uint32_t inlen,
+                            std::uint32_t outdata, std::uint32_t outlen) {
+    return "sceIoDevctl(\"" + device + "\", " + psprecomp::hex32(cmd) + ", in " + psprecomp::hex32(indata) + "/" +
+           std::to_string(inlen) + ", out " + psprecomp::hex32(outdata) + "/" + std::to_string(outlen) + ") is not modelled yet";
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
+    // IoFileMgrForUser::0x54F5FB11 - sceIoDevctl: report the observed call.
+    runtime.register_hle("IoFileMgrForUser", 0x54F5FB11u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const std::uint32_t dev = ctx.gpr[4];
+        const std::string device = dev != 0u && rt.memory().contains(dev, 1u) ? rt.memory().read_c_string(dev, 32u) : std::string("<invalid>");
+        rt.stop(describe_devctl(device, ctx.gpr[5], ctx.gpr[6], ctx.gpr[7], ctx.gpr[8], ctx.gpr[9]));
+    });
+
+
     // sceRtc::0x6FF40ACC - sceRtcGetTick
     runtime.register_hle("sceRtc", 0x6FF40ACCu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const std::uint32_t date = ctx.gpr[4], tick = ctx.gpr[5]; // $a0, $a1

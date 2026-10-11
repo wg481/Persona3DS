@@ -2,6 +2,18 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 8: first rendered frames; blocker 7: sceIoDevctl (2026-10-11)
+
+Maintainer's PC (clone at `6733dc4b`), 5M dispatches, frames every 60 vblanks, WAV.
+
+- [VERIFIED] Blocker 6 is cleared: the `sce_lbn` read succeeds and the game moves on (10 `io_open`, 9 `io_read_async` in total instead of 1,310 failed opens).
+- [VERIFIED] First rendered output: 528 displayed frames, 508 with non-black pixels, over 5.7 s of virtual time. 266 GE lists (from `0x48BAAE80`, 163-187 commands each, one finish callback each). GE features: 1,834 draws in through mode, 1,306 textured triangle strips (CLUT4 254, CLUT8 1,052, linear filter, mipmaps, alpha blend, dither), 528 clear sprites, double-buffered at `0x04000000` / `0x04088000`. [INFERRED] boot logos or intro; the frame images have not been inspected yet. The last frame (index 527) is black. Audio: 970 buffers, all silent.
+- [VERIFIED] The savedata utility was initialised and finished (`savedata_init`, `savedata_done`, upstream HLE). Then `user_main` calls `IoFileMgrForUser::sceIoDevctl` (NID `0x54F5FB11`, stub `0x08980E74`) from `0x0881890C` and the run stops there (missing import).
+- [VERIFIED] Maintainer's CTest 27/28: `p3p_fork_vfs` aborted on Windows (`0xc0000409`) because the test deleted its scratch image while the wrapper still had it open (Windows refuses; `std::filesystem::remove` threw). Fixed in `tests/test_fork_vfs.cpp`.
+- `sceIoDevctl` (uOFW `src/kd/iofilemgr/iofilemgr.c`: `dev, cmd, indata, inlen, outdata, outlen`) is device-specific and the run does not show Persona's arguments. Rather than guess a device or command, `core/src/hle/fork_kernel.cpp` registers a handler that stops the run with the device name, command and buffers (`describe_devctl`). The next run names the command to implement. [VERIFIED] `tests/test_fork_kernel.cpp` checks the stop message. Host CTest 26/26 (3 skipped).
+
+Next task: the maintainer's PC run 9 to read the `sceIoDevctl` arguments; implement that command from uOFW / pspautotests.
+
 ## Persona runs 6-7 and blocker 6: disc0:/sce_lbn raw-sector opens (2026-10-11)
 
 Maintainer's PC (clone at `3e394615`); CTest 27/27 on Windows.

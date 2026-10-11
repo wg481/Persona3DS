@@ -180,6 +180,20 @@ void test_rtc_get_tick() {
     rt.invoke_import("sceRtc", 0x6FF40ACCu, rt.cpu());
     CHECK(rt.cpu().gpr[2] == 0x80000023u);
 }
+// IoFileMgrForUser::0x54F5FB11: not modelled; the stop names the call (Persona run 8).
+void test_devctl_reports_call() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    constexpr std::uint32_t kName = 0x08B00000u;
+    const char name[] = "mscmhc0:";
+    for (std::uint32_t i = 0; i < sizeof name; ++i) rt.memory().store8(kName + i, static_cast<std::uint8_t>(name[i]));
+    rt.cpu().set_gpr(4, kName); rt.cpu().set_gpr(5, 0x02025806u); rt.cpu().set_gpr(6, 0u);
+    rt.cpu().set_gpr(7, 0u); rt.cpu().set_gpr(8, 0x08B00100u); rt.cpu().set_gpr(9, 4u);
+    rt.invoke_import("IoFileMgrForUser", 0x54F5FB11u, rt.cpu());
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason() == "sceIoDevctl(\"mscmhc0:\", 0x02025806, in 0x00000000/0, out 0x08B00100/4) is not modelled yet");
+}
 } // namespace
 
 int main() {
@@ -213,6 +227,7 @@ int main() {
     test_ctrl_sampling_cycle();
     test_rtc_local_time();
     test_rtc_get_tick();
+    test_devctl_reports_call();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
