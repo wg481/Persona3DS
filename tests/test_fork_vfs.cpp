@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <system_error>
 #include <vector>
 
 #ifndef P3P_SOURCE_DIR
@@ -52,6 +53,9 @@ int main() {
         std::ofstream out(image, std::ios::binary);
         for (int sector = 0; sector < 8; ++sector) out << std::string(2048, static_cast<char>(sector));
     }
+    {
+    // Scoped: the wrapper keeps the image open, and Windows cannot delete an
+    // open file (std::filesystem::remove would throw).
     p3p3ds::vfs::LbnIsoFileSystem fs(std::make_shared<OneFile>(), image);
     {
         const auto src = fs.open("sce_lbn0x3_size0x1000");
@@ -61,7 +65,9 @@ int main() {
     }
     CHECK(fs.open("NAMED.BIN") && fs.open("NAMED.BIN")->size() == 3u); // other paths go to the wrapped tree
     CHECK(!fs.open("MISSING.BIN"));
-    std::filesystem::remove(image);
+    }
+    std::error_code ec;
+    std::filesystem::remove(image, ec);
 
     // pspautotests umd/raw_access (hardware: HandleRaw Ok, memcmp_Raw 0): the
     // raw read equals PSP_GAME/PARAM.SFO opened by name. The expected file was
