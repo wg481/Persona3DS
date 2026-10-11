@@ -334,6 +334,34 @@ inline constexpr std::uint32_t kModuleStopNid = 0xCEE8593Cu;
 // relative paths (no current directory), stop the run and name the call.
 [[nodiscard]] std::optional<std::uint32_t> io_rename_static_result(const std::string &from, const std::string &to); // nullopt: needs the files
 
+// sceUtility MsgDialog: 0x2AD8E239 InitStart(params), 0x9A1C91D7
+// GetStatus, 0x95FC253B Update(n), 0x67AF3428 ShutdownStart. Imported by
+// Persona; added ahead of the game reaching them. Params: PSPSDK
+// psputility_msgdialog.h (base 48 bytes, unknown/result at 48, mode 52,
+// errorValue 56, message[512] 60, options 572, buttonPressed 576; sizes 572
+// / 580 / 708). [VERIFIED] pspautotests utility/msgdialog/dialog.expected
+// (hardware): InitStart 0; status 1 (INIT), then 2 (VISIBLE) with the word
+// at 48 set to 0; 3 (QUIT) when the dialog ends; ShutdownStart 0 and status
+// 4 (FINISHED) once, then 0. The hardware's fade-in (~34 frames) and fade-out
+// (~27) are compressed as upstream's savedata dialog does (INIT and FINISHED
+// reported once each; done on the first Update while VISIBLE). There is no
+// dialog UI yet: the dialog confirms its default button at once
+// [INFERRED, as PPSSPP's confirm]: buttonPressed (sizes >= 580) = 1 (YES/OK),
+// or 2 (NO) for a yes/no dialog (options 0x10) whose default is No (options
+// 0x100). The message, mode, error value and options are logged
+// (`msgdialog` event and console) so the run shows what the game said.
+// Out-of-sequence calls return 0x80110001 [INFERRED, as upstream savedata];
+// InitStart while the savedata dialog is active stops and names the call.
+struct MsgDialogState {
+    int status{};                         // 0 none, 1 init, 2 visible, 3 quit, 4 finished
+    bool init_reported{}, shutdown_reported{};
+    std::uint32_t param{}, size{};
+};
+inline constexpr std::uint32_t kMsgDialogOptionYesNo = 0x10u, kMsgDialogOptionDefaultNo = 0x100u;
+[[nodiscard]] constexpr std::uint32_t msgdialog_default_button(std::uint32_t options) noexcept {
+    return (options & kMsgDialogOptionYesNo) != 0u && (options & kMsgDialogOptionDefaultNo) != 0u ? 2u : 1u;
+}
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

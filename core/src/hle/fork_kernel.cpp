@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <string>
@@ -212,6 +213,7 @@ std::optional<std::uint32_t> io_rename_static_result(const std::string &from, co
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
+MsgDialogState g_msgdialog;
 std::map<std::int32_t, std::int32_t> g_module_stop_threads; // module uid -> thread running module_stop
 std::map<std::int32_t, bool> g_modules_stopped;             // module uid -> module_stop finished
 constexpr std::uint64_t kInterruptCheckDispatches = 32u; // dispatch boundaries between vblank checks
@@ -306,6 +308,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
     g_fork_kernel = &kernel;
     g_vblank_subintr = VblankSubInterrupts{};
     g_module_stop_threads.clear();
+    g_msgdialog = MsgDialogState{};
     g_modules_stopped.clear();
     psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
     const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
@@ -627,6 +630,56 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             if (!resolved || !resolved->fs->stat(resolved->path)) { ctx.set_gpr(2, 0x80010002u); return; } // no such source
         }
         rt.stop("sceIoRename(\"" + from + "\", \"" + to + "\") of an existing or relative file is not modelled yet");
+    });
+
+    // sceUtility MsgDialog (see fork_kernel.hpp).
+    constexpr std::uint32_t kUtilityBadState = 0x80110001u;
+    runtime.register_hle("sceUtility", 0x2AD8E239u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { // InitStart
+        auto &m = rt.memory();
+        const std::uint32_t p = ctx.gpr[4];
+        if (g_msgdialog.status != 0) { ctx.set_gpr(2, kUtilityBadState); return; }
+        if (kernel.savedata().status() != 0) { rt.stop("sceUtilityMsgDialogInitStart while the savedata dialog is active is not modelled yet"); return; }
+        const std::uint32_t size = m.contains(p, 4u) ? m.load32(p) : 0u;
+        if (size < 572u || !m.contains(p, size)) { rt.stop("sceUtilityMsgDialogInitStart(" + psprecomp::hex32(p) + ") with size " + std::to_string(size) + " is not modelled yet"); return; }
+        g_msgdialog = MsgDialogState{1, false, false, p, size};
+        const std::uint32_t mode = m.load32(p + 52u), error = m.load32(p + 56u), options = m.load32(p + 572u);
+        std::string text;
+        for (std::uint32_t i = 0; i < 512u; ++i) { const auto ch = m.load8(p + 60u + i); if (ch == 0u) break; text.push_back(static_cast<char>(ch)); }
+        rt.event("msgdialog", {{"mode", mode}, {"error", error}, {"options", options}, {"size", size}}, text);
+        std::cout << "[MSGDIALOG] mode=" << mode << " error=" << psprecomp::hex32(error) << " options=" << psprecomp::hex32(options)
+                  << " text=\"" << text << "\"\n";
+        ctx.set_gpr(2, 0u);
+    });
+    runtime.register_hle("sceUtility", 0x9A1C91D7u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { // GetStatus
+        auto &d = g_msgdialog;
+        if (d.status == 1) {
+            if (d.init_reported) {
+                d.status = 2;
+                if (rt.memory().contains(d.param + 48u, 4u)) rt.memory().store32(d.param + 48u, 0u); // "Result -> 00000000"
+            }
+            d.init_reported = true;
+        } else if (d.status == 4) {
+            if (d.shutdown_reported) d.status = 0;
+            else { d.shutdown_reported = true; ctx.set_gpr(2, 4u); return; }
+        }
+        ctx.set_gpr(2, static_cast<std::uint32_t>(d.status));
+    });
+    runtime.register_hle("sceUtility", 0x95FC253Bu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { // Update
+        auto &d = g_msgdialog;
+        ctx.set_gpr(2, 0u);
+        if (d.status != 2) return;
+        auto &m = rt.memory();
+        const auto button = msgdialog_default_button(m.load32(d.param + 572u));
+        if (d.size >= 580u) m.store32(d.param + 576u, button);
+        m.store32(d.param + 28u, 0u); // base.result [INFERRED]
+        rt.event("msgdialog_done", {{"button", button}});
+        d.status = 3;
+    });
+    runtime.register_hle("sceUtility", 0x67AF3428u, [](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) { // ShutdownStart
+        if (g_msgdialog.status != 3) { ctx.set_gpr(2, 0x80110001u); return; }
+        g_msgdialog.status = 4;
+        g_msgdialog.shutdown_reported = false;
+        ctx.set_gpr(2, 0u);
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

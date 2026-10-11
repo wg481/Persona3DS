@@ -799,6 +799,49 @@ void test_io_rename() {
     CHECK(rt.stopped());
     CHECK(std::filesystem::exists(dir / "test_fork_kernel.cpp"));
 }
+
+// MsgDialog: pspautotests utility/msgdialog/dialog.expected status sequence,
+// and the default button the dialog confirms without a UI.
+void test_msgdialog() {
+    using p3p3ds::hle::msgdialog_default_button;
+    CHECK(msgdialog_default_button(0x01u) == 1u);          // OK dialog
+    CHECK(msgdialog_default_button(0x11u) == 1u);          // yes/no, default yes
+    CHECK(msgdialog_default_button(0x111u) == 2u);         // yes/no, default no
+    CHECK(msgdialog_default_button(0x100u) == 1u);         // default-no without yes/no buttons
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kParams = 0x08A00000u;
+    auto call = [&](std::uint32_t nid, std::uint32_t a0 = 0u) {
+        rt.cpu().set_gpr(4, a0); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceUtility", nid, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    for (std::uint32_t i = 0; i < 708u; i += 4u) m.store32(kParams + i, 0u);
+    m.store32(kParams, 580u);           // V2
+    m.store32(kParams + 48u, 0x1337u);  // dialog->result in the test
+    m.store32(kParams + 52u, 1u);       // text mode
+    const char text[] = "Save data is corrupted.";
+    for (std::uint32_t i = 0; i < sizeof text; ++i) m.store8(kParams + 60u + i, static_cast<std::uint8_t>(text[i]));
+    m.store32(kParams + 572u, 0x111u);  // yes/no, default no
+    CHECK(call(0x9A1C91D7u) == 0u);     // nothing running
+    CHECK(call(0x67AF3428u) == 0x80110001u);
+    CHECK(call(0x2AD8E239u, kParams) == 0u);        // "InitStart: 00000000"
+    CHECK(call(0x2AD8E239u, kParams) == 0x80110001u);
+    CHECK(call(0x9A1C91D7u) == 1u);                 // "GetStatus: 00000001"
+    CHECK(m.load32(kParams + 48u) == 0x1337u);
+    CHECK(call(0x9A1C91D7u) == 2u);                 // VISIBLE
+    CHECK(m.load32(kParams + 48u) == 0u);           // "Result -> 00000000"
+    (void)call(0x95FC253Bu, 1u);                    // Update: confirms the default
+    CHECK(m.load32(kParams + 576u) == 2u);
+    CHECK(call(0x9A1C91D7u) == 3u);                 // QUIT
+    CHECK(call(0x67AF3428u) == 0u);                 // "ShutdownStart: 00000000"
+    CHECK(call(0x9A1C91D7u) == 4u);                 // FINISHED once
+    CHECK(call(0x9A1C91D7u) == 0u);
+    CHECK(!rt.stopped());
+}
 } // namespace
 
 int main() {
@@ -851,6 +894,7 @@ int main() {
     test_module_stop_unload();
     test_exit_game();
     test_io_rename();
+    test_msgdialog();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
