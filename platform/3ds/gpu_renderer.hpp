@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <atomic>
 #include <unordered_map>
+#include <string>
 #include <vector>
 
 namespace p3p3ds::n3ds {
@@ -76,6 +77,8 @@ public:
     bool read_top_screen(std::vector<std::uint8_t> &rgb);
 
     [[nodiscard]] const GpuStats &gpu_stats() const { return gpu_stats_; }
+    // P3P3DS: "address draws/presents/cpu-presents" per render target, for the report.
+    [[nodiscard]] std::string target_text() const;
     [[nodiscard]] const ge::VertexCacheStats &vertex_cache_stats() const { return vertex_cache_.stats(); }
     [[nodiscard]] bool vertex_cache_enabled() const { return vertex_cache_enabled_; }
     // The last presented picture came from guest memory (CPU-written, e.g. a movie frame).
@@ -103,6 +106,7 @@ private:
         C3D_Tex tex{};
         C3D_RenderTarget *rt{};
         std::uint64_t gpu_seq{}, cpu_seq{};
+        std::uint64_t draws{}, presents{}, cpu_presents{}; // P3P3DS: per-target counters for the report (movie flicker)
     };
     struct CachedTexture {
         C3D_Tex tex{};

@@ -495,6 +495,24 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
                 if (!C3D_TexInit(&entry.tex, static_cast<u16>(tw), static_cast<u16>(th), fmt)) return nullptr;
             }
             const u64 upload_start = svcGetSystemTick();
+            // P3P3DS: unswizzled 8888 without padding (Persona's 512x512 movie texture, re-uploaded for every
+            // picture: GE texture time 37 % in movies) is read straight from guest memory; decode_texture
+            // gives the same values (little-endian texel words) through an extra pass.
+            const std::uint8_t *direct = info.format == 3u && !info.swizzled && tw == info.width && th == info.height && fmt == GPU_RGBA8
+                                             ? memory.raw_pointer(info.address, static_cast<std::size_t>(info.stride) * 4u * (th - 1u) + tw * 4u)
+                                             : nullptr;
+            if (direct != nullptr) {
+                auto *dst = static_cast<std::uint32_t *>(entry.tex.data);
+                for (std::uint32_t y = 0; y < th; ++y) {
+                    const std::uint8_t *row = direct + static_cast<std::size_t>(y) * info.stride * 4u;
+                    const std::uint32_t ty = tiled_row(y, th);
+                    for (std::uint32_t x = 0; x < tw; ++x) {
+                        std::uint32_t c;
+                        std::memcpy(&c, row + x * 4u, 4u);
+                        dst[tiled_index(x, ty, tw)] = to_rgba8(c);
+                    }
+                }
+            } else {
             ge::decode_texture(memory, regs, info, rgba_);
             for (std::uint32_t y = 0; y < th; ++y)
                 for (std::uint32_t x = 0; x < tw; ++x) {
@@ -503,6 +521,7 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
                     if (fmt == GPU_RGBA8) static_cast<std::uint32_t *>(entry.tex.data)[at] = to_rgba8(c);
                     else static_cast<std::uint16_t *>(entry.tex.data)[at] = to_16(c, fmt);
                 }
+            }
             C3D_TexFlush(&entry.tex);
             gpu_stats_.upload_ticks += svcGetSystemTick() - upload_start;
             entry.hash = hash;
@@ -710,6 +729,7 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
         ++gpu_stats_.cpu_to_target;
     }
     target->gpu_seq = ++seq_;
+    ++target->draws; // P3P3DS: per-target counter (report)
 
     const auto layout = ge::vertex_layout(r24(regs, 0x12));
     const bool clear_mode = (r24(regs, 0xD3) & 1u) != 0u;
@@ -1163,6 +1183,7 @@ void GpuRenderer::present(psprecomp::GuestMemory &memory, const hle::DisplayFram
             cpu = true;
             source = &fallback_;
         }
+        if (t != nullptr) { ++t->presents; if (cpu) ++t->cpu_presents; } // P3P3DS: per-target counters (report)
     }
     if (!cpu && source == shown_ && source_seq == shown_seq_) {
         ++gpu_stats_.skipped_presents;
@@ -1214,6 +1235,19 @@ bool GpuRenderer::read_top_screen(std::vector<std::uint8_t> &rgb) {
         }
     linearFree(buffer);
     return true;
+}
+
+// P3P3DS: per-target counters for the report.
+std::string GpuRenderer::target_text() const {
+    std::string text;
+    for (const auto &t : targets_) {
+        char line[96];
+        std::snprintf(line, sizeof line, "%s%08lx d%llu p%llu c%llu", text.empty() ? "" : "  ", static_cast<unsigned long>(t.address),
+                      static_cast<unsigned long long>(t.draws), static_cast<unsigned long long>(t.presents),
+                      static_cast<unsigned long long>(t.cpu_presents));
+        text += line;
+    }
+    return text;
 }
 
 } // namespace p3p3ds::n3ds

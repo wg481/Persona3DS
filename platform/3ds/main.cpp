@@ -450,7 +450,8 @@ std::string gpu_text() {
                   static_cast<unsigned long long>(c.hits / 1000u), static_cast<unsigned long long>(c.misses / 1000u),
                   static_cast<unsigned long long>(c.volatile_skips / 1000u), static_cast<unsigned long long>(c.full / 1000u),
                   static_cast<unsigned long long>(g.run_draws / 1000u), static_cast<unsigned long long>(g.model_runs / 1000u));
-    return std::string(buf) + vc;
+    // Persona3DS: per render target "address d<draws> p<presents> c<CPU presents>" (movie flicker evidence).
+    return std::string(buf) + vc + "targets: " + g_gpu->target_text() + "\n";
 }
 
 TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
