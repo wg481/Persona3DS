@@ -231,6 +231,28 @@ class TestPrepareGame(unittest.TestCase):
                                  verbose=False, profile=profile)
             self.assertIn("SHA-256 mismatch", str(ctx.exception))
 
+    def test_unsupported_tag_points_to_decrypted_eboot(self):
+        header = bytearray(0x200)
+        header[:4] = b"~PSP"
+        header[0xD0:0xD4] = (0xD9160BF0).to_bytes(4, "little")
+        with self.assertRaises(ValueError) as ctx:
+            decrypt_eboot(bytes(header))
+        self.assertIn("0xD9160BF0", str(ctx.exception))
+        self.assertIn("--decrypted-eboot", str(ctx.exception))
+
+    def test_profile_unsupported_tag_fails_before_decrypting(self):
+        profile = dict(load_profile("profiles/p1p"), iso_md5="TODO")
+        self.assertEqual(profile["eboot_tag"], "0xD9160BF0")
+        sfo = create_synthetic_param_sfo({"DISC_ID": profile["disc_id"], "TITLE": "Synthetic"})
+        iso_bytes = create_synthetic_iso({"PSP_GAME/PARAM.SFO": sfo, "PSP_GAME/SYSDIR/EBOOT.BIN": b"~PSP" + bytes(0x200)})
+        with tempfile.TemporaryDirectory() as tmp:
+            iso = Path(tmp) / "game.iso"
+            iso.write_bytes(iso_bytes)
+            with self.assertRaises(ValueError) as ctx:
+                prepare_p3p_game(str(iso), check_only=True, verbose=False, profile=profile)
+        self.assertIn("0xD9160BF0", str(ctx.exception))
+        self.assertIn("--decrypted-eboot", str(ctx.exception))
+
     def test_missing_iso_raises(self):
         with self.assertRaises(FileNotFoundError):
             prepare_p3p_game("non_existent_disc_image_12345.iso", verbose=False)

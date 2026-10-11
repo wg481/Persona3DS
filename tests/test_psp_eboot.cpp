@@ -7,6 +7,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 using namespace p3p3ds::builder;
 
@@ -22,6 +25,18 @@ int main(int argc, char **argv) {
     const auto pt = aes128_cbc_decrypt(key, ct, 16);
     const std::uint8_t expect[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
     check(std::memcmp(pt.data(), expect, 16) == 0, "aes128 FIPS-197 C.1");
+
+    // An unsupported tag (e.g. Persona ULUS-10432's 0xD9160BF0) is rejected with a message naming it.
+    {
+        std::vector<std::uint8_t> eboot(0x200, 0);
+        std::memcpy(eboot.data(), "~PSP", 4);
+        const std::uint32_t tag = 0xD9160BF0u;
+        std::memcpy(&eboot[0xD0], &tag, 4); // little-endian host, as the PSP
+        std::string message;
+        try { (void)decrypt_eboot(eboot); } catch (const std::runtime_error &e) { message = e.what(); }
+        check(message.find("0xD9160BF0") != std::string::npos && message.find("--decrypted-eboot") != std::string::npos,
+              "unsupported tag names the tag and --decrypted-eboot");
+    }
 
     if (argc > 1 && *kExpectedElfSha256 == '\0') {
         std::printf("the game profile has no reference SHA-256 yet: ELF check skipped\n");

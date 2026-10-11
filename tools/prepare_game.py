@@ -62,6 +62,7 @@ def load_profile(profile_dir: str = DEFAULT_PROFILE_DIR) -> dict:
         "iso_md5": sums.get("iso_md5", "TODO"),
         "encrypted_eboot_sha256": sums.get("encrypted_eboot_sha256", "TODO"),
         "decrypted_elf_sha256": sums.get("decrypted_elf_sha256", "TODO"),
+        "eboot_tag": str(game.get("eboot_tag", "")),
     }
 
 
@@ -232,9 +233,9 @@ def decrypt_eboot(eboot_bytes: bytes) -> bytes:
 
     tag, = struct.unpack_from("<I", eboot_bytes, 0xD0)
     if tag != PSP_TAG_P3P:
-        raise ValueError(f"Unsupported EBOOT.BIN tag: expected 0x{PSP_TAG_P3P:08X}, got 0x{tag:08X}. "
-                         f"Decrypt the EBOOT with another tool (e.g. PPSSPP's decrypted EBOOT dump) "
-                         f"and pass it with --decrypted-eboot")
+        raise ValueError(f"Unsupported EBOOT.BIN tag 0x{tag:08X}: this decryptor supports only 0x{PSP_TAG_P3P:08X} "
+                         f"(other tags are not supported yet). Decrypt the EBOOT with "
+                         f"PPSSPP (\"dump decrypted EBOOT\") and rerun with --decrypted-eboot <file>")
 
     attr = struct.unpack_from("<H", eboot_bytes, 0x06)[0]
     if attr & 1:
@@ -466,6 +467,11 @@ def prepare_p3p_game(
             elif enc_hash != profile["encrypted_eboot_sha256"]:
                 print(f"  Notice: Encrypted EBOOT SHA-256 differs from reference retail UMD dump.")
 
+            if not is_placeholder(profile.get("eboot_tag")) and int(profile["eboot_tag"], 16) != PSP_TAG_P3P:
+                raise ValueError(
+                    f"{profile['name']} ({profile['disc_id_display']}) uses EBOOT tag {profile['eboot_tag']}, which "
+                    f"this decryptor does not support yet (only 0x{PSP_TAG_P3P:08X}). Decrypt the EBOOT with PPSSPP "
+                    f"(\"dump decrypted EBOOT\") and rerun with --decrypted-eboot <file>")
             if verbose:
                 print("  Decrypting Allegrex executable via PSP AES-128 engine...")
             decrypted_elf_bytes = decrypt_eboot(eboot_bytes)
