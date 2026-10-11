@@ -2,6 +2,18 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 10 and blocker 8: sceIoDevctl("fatms0:", 0x02425823) (2026-10-11)
+
+Maintainer's PC (clone at `efa1bfb3`), 5M dispatches.
+
+- [VERIFIED] Blocker 7 is cleared: the game accepted the free-space answer and continued. 267 GE lists (254 of 187 commands, then 10 of 163 commands), frames as in runs 8-9 (loading indicator, PNGs at frames 120 and 300), 973 silent audio buffers.
+- [VERIFIED] New stop: `sceIoDevctl("fatms0:", 0x02425823, in 0x00000000/0, out 0x09FEF9F0/4)` from `0x08817EDC`.
+- Semantics: no uOFW, PSPSDK or pspautotests source for this command. [INFERRED] from the behaviour references (AGENTS.md section 4; read, not copied): PPSSPP `Core/HLE/sceIo.cpp` ("Check if FAT enabled") and JPCSP `IoFileMgrForUser.java` ("check assigned device") both write 1 (stick inserted and ready) to the 4-byte output and return 0. They disagree on errors (PPSSPP ignores `outLen` and delays 23.5 ms; JPCSP requires `outLen >= 4`). Neither error case is observed.
+- Implementation in `core/src/hle/fork_kernel.cpp`: with `outLen >= 4` and a valid address, write 1 and return 0, with no delay. Any other form is still reported by the stop message.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: Persona's call gives `$v0 = 0` and output 1; `outLen = 0` is still reported. 2 failures with the branch disabled. Host CTest 26/26 (3 skipped).
+- [VERIFIED] GitHub Actions on PR #1 (head `efa1bfb3`): Linux and Windows host build + tests and **New 3DS runtime (devkitARM)** all succeed. The fork's changes to `platform/3ds/main.cpp`, `fork_kernel.cpp` and `fork_vfs.cpp` compile with devkitARM; the `.3dsx` itself needs the game and is built on the maintainer's PC.
+- [UNVERIFIED] Not yet run on Persona; first `.3dsx` build and New 3DS / Azahar run pending.
+
 ## Persona run 9 and blocker 7: sceIoDevctl("ms0:", 0x02425818) (2026-10-11)
 
 Maintainer's PC (clone at `b1b13c08`); CTest 28/28 on Windows (`p3p_modulemgr` skipped), including the fixed `p3p_fork_vfs`.

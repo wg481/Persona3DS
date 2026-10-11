@@ -196,6 +196,27 @@ void test_devctl_reports_call() {
     CHECK(rt.stop_reason() == "sceIoDevctl(\"mscmhc0:\", 0x02025806, in 0x00000000/0, out 0x08B00100/4) is not modelled yet");
 }
 
+// fatms0: 0x02425823 as Persona calls it (run 10): out = a stack word, outlen 4.
+void test_devctl_fat_ready() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kName = 0x08B00000u, kOut = 0x09FEF9F0u;
+    const char name[] = "fatms0:";
+    for (std::uint32_t i = 0; i < sizeof name; ++i) m.store8(kName + i, static_cast<std::uint8_t>(name[i]));
+    m.store32(kOut, 0xDEADBEEFu);
+    rt.cpu().set_gpr(4, kName); rt.cpu().set_gpr(5, 0x02425823u); rt.cpu().set_gpr(6, 0u);
+    rt.cpu().set_gpr(7, 0u); rt.cpu().set_gpr(8, kOut); rt.cpu().set_gpr(9, 4u);
+    rt.invoke_import("IoFileMgrForUser", 0x54F5FB11u, rt.cpu());
+    CHECK(!rt.stopped());
+    CHECK(rt.cpu().gpr[2] == 0u);
+    CHECK(m.load32(kOut) == 1u);
+    rt.cpu().set_gpr(9, 0u); // not observed: still reported, not guessed
+    rt.invoke_import("IoFileMgrForUser", 0x54F5FB11u, rt.cpu());
+    CHECK(rt.stopped());
+}
+
 // ms0: 0x02425818 (SCE_PR_GETDEV) as Persona calls it (run 9): indata = a
 // stack word holding a pointer to the SceDevInf right after it.
 void test_devctl_ms_free_space() {
@@ -259,6 +280,7 @@ int main() {
     test_rtc_get_tick();
     test_devctl_reports_call();
     test_devctl_ms_free_space();
+    test_devctl_fat_ready();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

@@ -116,7 +116,13 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
                 return;
             }
         }
-        rt.stop(describe_devctl(device, cmd, indata, inlen, ctx.gpr[8], ctx.gpr[9]));
+        const std::uint32_t outdata = ctx.gpr[8], outlen = ctx.gpr[9];
+        if (device == "fatms0:" && cmd == 0x02425823u && outlen >= 4u && m.contains(outdata, 4u)) {
+            m.store32(outdata, 1u); // FAT ready: a stick is always inserted
+            ctx.set_gpr(2, 0u);
+            return;
+        }
+        rt.stop(describe_devctl(device, cmd, indata, inlen, outdata, outlen));
     });
 
 

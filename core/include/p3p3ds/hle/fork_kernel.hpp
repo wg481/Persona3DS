@@ -114,6 +114,15 @@ inline constexpr std::uint64_t kForkRtcEpochSeconds = 1199145600u; // = utils.cp
 // sectorCount 64; cluster counts between 256 MB and 128 GB worth. Persona
 // (run 9, 0x088188E8..0x08818938) computes sectorSize * sectorCount *
 // freeClusters / 1024 and branches when it is under 256 (KiB).
+//
+// fatms0: 0x02425823 (run 10: out = 4-byte stack word, no input): "memory
+// stick FAT ready / device assigned". No uOFW, PSPSDK or pspautotests source;
+// [INFERRED] from the behaviour references (AGENTS.md section 4, read only):
+// PPSSPP Core/HLE/sceIo.cpp and JPCSP IoFileMgrForUser.java both write 1
+// (stick inserted and ready) to the output word and return 0. They disagree
+// on errors (PPSSPP ignores outLen and delays the result by 23.5 ms; JPCSP
+// needs outLen >= 4); neither case is observed, so only outLen >= 4 with a
+// valid address is modelled, without the delay.
 struct MemoryStickInfo {
     // [INFERRED] a fixed 1 GB (SI) stick, all free: deterministic, inside the
     // hardware test's range, and small enough that Persona's 32-bit product
