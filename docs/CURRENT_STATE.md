@@ -2,6 +2,19 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Handoff from the cloud session (2026-10-11)
+
+State: PC boots through New Game into gameplay with music and movies; New 3DS runs title, menus and gameplay at full speed with sound; 3DS movies decode on MVD but flicker and run at ~50-60 %.
+
+- [VERIFIED] Maintainer's 3DS run with `no_gpu_thread.txt` (GE on core 0) during the opening movie: slower (64 % last 10 s) and the flicker is unchanged, so the GE worker's timing is ruled out for the movie flicker (as it was for the fade boxes).
+- Change: `platform/3ds/fork_ndsp.hpp` `kLeadFrames` 2048 -> 8192 (a block is final once data has arrived 186 ms past it) to cut the late-dropped PCM; [UNVERIFIED] until the next report's `late` count (was 795,999).
+- Open, in order (evidence and the files involved are in the sections below):
+  1. Movie flicker on 3DS: one of the game's two framebuffers shows black with white pixels top-left on alternate vblanks while the other shows the picture (frame dumps 819-840). Not GE timing. Next evidence: per-target counters in `gpu_renderer.cpp` (draws per target address during the movie, block transfers into 0x04088000) or a PC draw log of two consecutive movie frames (`--draw-log-from` covers frames N+1 and N+2) to see whether the game draws into both buffers or copies one into the other (a GE block transfer from a GPU-only target would copy stale guest VRAM on the 3DS).
+  2. 3DS movie speed: MVD decode ~15 ms + copy ~2.7 ms per picture on the main core; the 1 MiB 8888 movie texture is hashed and uploaded on core 2 for every picture.
+  3. ATLUS logo / disclaimer fade boxes (see "Music from converted tracks; opening-text glitch narrowed").
+  4. Diagnostic events missing from PC run 25's summary (`movie_track`, `atrac_track`) although media played.
+- Maintainer-side setup (not in git): MSYS2 UCRT64 ffmpeg + pkgconf; `python tools/convert_media.py` output in `profiles/p1p/game/media` (copied to `sdmc:/persona3ds/media`); `sdmc:/3ds/dspfirm.cdc` for NDSP. Toggles on the SD card: `no_gpu_thread.txt`, `dump_every.txt` (BMPs to `sdmc:/persona3ds/frames`, slow), `play_movies.txt`.
+
 ## Milestone: sound on the New 3DS; movie flicker narrowed (2026-10-11)
 
 - [VERIFIED] Maintainer's New 3DS (`07f8f099`, report label stale): sound plays (game sounds, converted music: `music : 2 matched`; movie audio: 41 units). Report: 59.9 fps, 90 % of real time overall, 99 % in the last 10 s (48 % idle), `audio : ndsp ok, 2232 blocks, 795999 late, 119298 skipped, 147 gaps`, heap 52,639 KiB in use, linear free 7,884 KiB, no failed allocation. Open: 795,999 frames of PCM arrived for virtual times before the play cursor and were dropped (about a third of the 2,285,568 frames played) and the skip-forward rule fired (119,298 frames); [INFERRED] the cursor is pushed ahead by one channel's buffers (`newest_` jumps when a channel queues ahead or after a slow stretch), dropping the other channels' later-arriving buffers. Next step: hold the cursor to the slowest active channel (or a fixed latency behind the newest buffer) and compare the late count.

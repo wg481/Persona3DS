@@ -27,7 +27,10 @@ public:
     static constexpr std::uint32_t kRate = 44100u;
     static constexpr std::uint32_t kBlock = 1024u;      // frames per NDSP wave buffer (23 ms)
     static constexpr std::uint32_t kBuffers = 8u;       // 186 ms queued at most
-    static constexpr std::uint32_t kLeadFrames = 2048u; // wait for other channels' buffers this long
+    // Wait this long for other channels' buffers before a block is final. 2048 (46 ms) dropped a third
+    // of the PCM as late on hardware (report: 795,999 late of 2,285,568 played): [INFERRED] channels
+    // queue up to one large buffer ahead, so 8192 (186 ms latency) [UNVERIFIED].
+    static constexpr std::uint32_t kLeadFrames = 8192u;
     static constexpr std::uint32_t kRingFrames = 1u << 16; // 1.49 s
 
     NdspOutput() {
