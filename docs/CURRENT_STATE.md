@@ -2,6 +2,11 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## PC run 24: New Game reaches gameplay on PC (2026-10-11)
+
+- [VERIFIED] PC run 24 (`2245866e`, `new_game.txt`, 30M dispatches, stop vblank 6000; CTest 29/29, `p3p_modulemgr` skipped): the corrected input selects NEW GAME ("Start from the beginning", frames 2,700-2,760), the game asks "Before beginning the game, please choose a difficulty setting." (frames 2,880-3,120), the repeated CROSS presses confirm it, and the run ends in play in "1F Empty Classroom" with the cast on screen and the NEW MOON indicator (frame 11,460). Stop: "Stop vblank 6000 reached"; no blocker. Audio: 18,943 buffers, 0 late, 0 clipped.
+- [VERIFIED] Frame indices are not pictures: each picture produces two `display_framebuffer` events (`sync` 0, then `sync` 1, same address, same hash; run 24 last 25 events), so 11,470 frame indices in 6,000 vblanks are about one picture per vblank. The guess that a movie was racing through black frames was [WRONG].
+
 ## New 3DS title screen: texture budget too small for Persona (2026-10-11)
 
 - [VERIFIED] PC draw log of the title screen (`--draw-log-from 2400`, maintainer upload `title_draws.txt`): 28 draws using 18 distinct textures, 10 of them 512x512 CLUT8 with an 8888 palette (`fmt=5`, `clut=00FF03`). `pica_format` (`platform/3ds/gpu_renderer.cpp`) decodes those to RGBA8, 1 MiB each; the whole frame needs about 12 MiB of decoded textures.
