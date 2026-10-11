@@ -163,7 +163,7 @@ std::int32_t get_remain_frame_of(const IdInfo &i) { // 2ABC
     case 3: {
         if (i.curOff >= i.dataOff + i.streamDataByte) return 0;
         const std::int32_t ret = static_cast<std::int32_t>((i.dataOff + i.streamDataByte - i.curOff) / i.sampleSize) - i.numFrame;
-        return std::max(ret, 0);
+        return std::max<std::int32_t>(ret, 0);
     }
     case 4: return sub_2DB8(i);
     case 5: return sub_2DF8(i);
