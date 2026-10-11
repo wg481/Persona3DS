@@ -4,6 +4,7 @@
 #include "p3p3ds/hle/fork_media.hpp"
 #include "psprecomp/guest_memory.hpp"
 
+#include <chrono>
 #include <cstring>
 
 namespace p3p3ds::hle::media {
@@ -101,7 +102,10 @@ void Movies::picture_decoded(std::uint32_t handle) {
 const std::uint32_t *Movies::current_picture(std::uint32_t handle, std::uint32_t &width, std::uint32_t &height) {
     auto it = playing_.find(handle);
     if (it == playing_.end() || it->second.pictures == 0u) return nullptr;
+    const auto start = std::chrono::steady_clock::now();
     const auto *p = it->second.track->picture(it->second.pictures - 1u);
+    stats_.decode_us += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
     if (const auto *d = it->second.track->decoder()) decoder_status_ = d->status();
     if (p == nullptr) { ++stats_.decode_failures; return nullptr; }
     ++stats_.pictures;

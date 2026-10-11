@@ -80,6 +80,7 @@ struct MovieEntry {
 
 struct MovieStats {
     std::uint32_t entries{}, matched{}, unmatched{}, pictures{}, audio_units{}, decode_failures{};
+    std::uint64_t decode_us{}, copy_us{}; // host time decoding pictures / copying them in sceMpegAvcCsc
 };
 
 // Movie state of the game's sceMpeg instances, keyed by the mpeg handle.
@@ -100,6 +101,7 @@ public:
     void release(std::uint32_t handle) { playing_.erase(handle); }
     [[nodiscard]] bool playing() const noexcept { return !playing_.empty(); }
     [[nodiscard]] const MovieStats &stats() const noexcept { return stats_; }
+    void add_copy_time(std::uint64_t us) noexcept { stats_.copy_us += us; }
     [[nodiscard]] const std::string &decoder_status() const noexcept { return decoder_status_; }
 
 private:

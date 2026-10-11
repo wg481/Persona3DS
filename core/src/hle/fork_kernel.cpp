@@ -12,6 +12,7 @@
 #include "psprecomp/runtime.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -449,6 +450,17 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         constexpr std::uint32_t kBlack = 0xFF000000u; // opaque, as BlankMpegDecoder
         std::uint32_t pw = 0, ph = 0;
         const std::uint32_t *picture = hle::media::fork_movies().current_picture(m.load32(mpeg), pw, ph);
+        const auto copy_start = std::chrono::steady_clock::now();
+        if (picture != nullptr && x + w <= pw && y + h <= ph) { // the whole range inside the picture: row copies
+            for (std::uint32_t row = 0; row < h; ++row) {
+                std::memcpy(m.raw_pointer(row_address(row), w * 4u), picture + (y + row) * pw + x, w * 4u);
+                m.notify_vram_write(row_address(row), w * 4u);
+            }
+            hle::media::fork_movies().add_copy_time(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - copy_start).count()));
+            ctx.set_gpr(2, 0u);
+            return;
+        }
         for (std::uint32_t row = 0; row < h; ++row) {
             std::uint8_t *p = m.raw_pointer(row_address(row), w * 4u);
             const std::uint32_t py = y + row;

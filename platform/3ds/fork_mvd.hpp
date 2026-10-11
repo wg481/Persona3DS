@@ -15,6 +15,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace p3p3ds::n3ds {
 
@@ -77,12 +78,18 @@ public:
         if (r != MVD_STATUS_OK) { note_error("render", r); return false; }
         GSPGPU_InvalidateDataCache(out_, width_ * height_ * 2u);
         const std::uint32_t w = width < width_ ? width : width_, h = height < height_ ? height : height_;
-        for (std::uint32_t y = 0; y < h; ++y)
-            for (std::uint32_t x = 0; x < w; ++x) {
-                const std::uint16_t v = out_[y * width_ + x];
+        if (lut_.empty()) { // RGB565 -> PSP 8888, one lookup per pixel (256 KiB)
+            lut_.resize(65536);
+            for (std::uint32_t v = 0; v < 65536u; ++v) {
                 const std::uint32_t r5 = v >> 11, g6 = (v >> 5) & 63u, b5 = v & 31u;
-                rgba[y * width + x] = 0xFF000000u | ((b5 << 3 | b5 >> 2) << 16) | ((g6 << 2 | g6 >> 4) << 8) | (r5 << 3 | r5 >> 2);
+                lut_[v] = 0xFF000000u | ((b5 << 3 | b5 >> 2) << 16) | ((g6 << 2 | g6 >> 4) << 8) | (r5 << 3 | r5 >> 2);
             }
+        }
+        for (std::uint32_t y = 0; y < h; ++y) {
+            const std::uint16_t *src = out_ + y * width_;
+            std::uint32_t *dst = rgba + y * width;
+            for (std::uint32_t x = 0; x < w; ++x) dst[x] = lut_[src[x]];
+        }
         return true;
     }
     [[nodiscard]] std::string status() const override { return status_; }
@@ -103,6 +110,7 @@ private:
     Result init_{-1};
     bool ready_{};
     std::string status_;
+    std::vector<std::uint32_t> lut_;
 };
 
 inline void install_mvd_decoder() {

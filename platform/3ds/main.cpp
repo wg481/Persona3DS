@@ -622,7 +622,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "iso    : %s\n"
         "music  : %lu converted, %lu matched, %lu unmatched\n"
         "movies : %lu converted, %lu matched, %lu unmatched, %lu pictures, %lu audio, %lu failed\n"
-        "         %s\n"
+        "         %s; decode %.2f ms, copy %.2f ms per picture\n"
         "stop   : %s\n"
         "%s"
         "\nSTART+SELECT: quit\n",
@@ -643,6 +643,10 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().audio_units),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().decode_failures),
         p3p3ds::hle::media::fork_movies().decoder_status().empty() ? "-" : p3p3ds::hle::media::fork_movies().decoder_status().c_str(),
+        p3p3ds::hle::media::fork_movies().stats().pictures != 0u
+            ? p3p3ds::hle::media::fork_movies().stats().decode_us / 1000.0 / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
+        p3p3ds::hle::media::fork_movies().stats().pictures != 0u
+            ? p3p3ds::hle::media::fork_movies().stats().copy_us / 1000.0 / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
         rt.stopped() ? rt.stop_reason().c_str() : "-", profile_text(s).c_str());
     return buf;
 }
