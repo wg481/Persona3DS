@@ -1,5 +1,6 @@
 // See fork_kernel.hpp.
 #include "p3p3ds/hle/fork_kernel.hpp"
+#include "p3p3ds/hle/fork_atrac.hpp"
 
 #include "p3p3ds/hle/mpeg.hpp"
 #include "p3p3ds/kernel_state.hpp"
@@ -311,6 +312,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
     g_msgdialog = MsgDialogState{};
     g_modules_stopped.clear();
     psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
+    atrac::register_fork_atrac(runtime, kernel); // sceAtrac3plus (fork_atrac.cpp)
     const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
         runtime.register_hle("InterruptManager", nid, [fn](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
             const auto intno = static_cast<std::int32_t>(ctx.gpr[4]);
