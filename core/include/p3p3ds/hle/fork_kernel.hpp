@@ -149,6 +149,21 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_ycbcr_query(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width,
                                                std::uint32_t height, std::uint32_t result);
 
+// sceMpeg 0x67179B1B sceMpegAvcInitYCbCr(mpeg, mode, width, height, buffer)
+// (signature: playertiming.c). Persona (PC run 14, New 3DS run 4) calls it
+// in a loop from 0x088117F0, once per buffer of a table, with the same
+// mpeg, mode 1 and dimensions as sceMpegAvcQueryYCbCrSize; any non-zero
+// result leaves the loop. No hardware .expected exists. The behaviour
+// references agree on returning 0 for mode 1 and a valid buffer, and
+// disagree on side effects: PPSSPP writes nothing; JPCSP clears a 128-byte
+// header and stores plane pointers at buffer + 16..44. Modelled: mode 1
+// with dimensions sceMpegAvcQueryYCbCrSize accepts and a buffer of that size
+// in guest memory -> 0, buffer untouched [INFERRED]. If a later YCbCr call
+// fails on the buffer contents, the JPCSP header is the first suspect.
+// Anything else stops the run and names its arguments.
+[[nodiscard]] std::string describe_ycbcr_init(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width,
+                                              std::uint32_t height, std::uint32_t buffer);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

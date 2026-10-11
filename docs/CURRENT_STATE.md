@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 14 and New 3DS run 4; blocker 11: sceMpegAvcInitYCbCr (2026-10-11)
+
+- [VERIFIED] Blocker 10 is cleared on both targets: `sceMpegAvcQueryYCbCrSize` returned 0 and the game moved on. PC run 14 (maintainer, `5265e939`, CTest 28/28 on Windows): frames, audio and event counts as in run 13. New 3DS run 4: 713 frames, 59.9 fps, 99 % of real time in the last 10 s, no failed allocation.
+- [VERIFIED] Both stop at the missing import `sceMpeg::0x67179B1B` (`sceMpegAvcInitYCbCr`, stub `0x0898125C`), called from `0x088117F0` inside a loop: `$a0 = 0x08CC268C`, `$a1 = 1`, `$a2`/`$a3` from the same words as the size query, `$t0` = entry `$s0` of a pointer table at `*($s2 + 8)`. A zero result goes on to the next buffer (`beq $v0, $zero` at `0x088117FC`).
+- Semantics: no hardware `.expected`. PPSSPP `sceMpeg.cpp` and JPCSP `sceMpeg.java` (read, not copied) both return 0 for mode 1 with a valid buffer, but disagree on side effects: PPSSPP writes nothing; JPCSP clears a 128-byte header and stores plane pointers at buffer + 16..44.
+- Implementation in `core/src/hle/fork_kernel.cpp`: mode 1, dimensions the size query accepts, and a buffer of that size in guest memory: return 0 and leave the buffer untouched ([INFERRED], the smaller behaviour). Anything else stops and names its arguments. Open question [UNVERIFIED]: whether Persona reads the header; if a later YCbCr call fails on the buffer contents, the JPCSP layout is the first suspect.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: Persona's call returns 0 and leaves the buffer as it was; a null buffer is reported. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
 ## Persona run 13 and New 3DS run 3; blocker 10: sceMpegAvcQueryYCbCrSize (2026-10-11)
 
 - [VERIFIED] Blocker 9 is cleared on both targets: `sceKernelRegisterSubIntrHandler` returns and the game continues into its movie setup. PC run 13 (maintainer, `b4852c20`, CTest 28/28 on Windows, default input script): 1,784 frames, the ATLUS logo at frame 1,740 (PNG), the same audio as run 12. New 3DS run 3: 600 frames, 59.9 fps, 98 % of real time in the last 10 s.

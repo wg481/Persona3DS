@@ -381,6 +381,28 @@ void test_mpeg_ycbcr_size() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceMpegAvcQueryYCbCrSize(mpeg 0x08CC268C, mode 2, 480 x 272") != std::string::npos);
 }
+
+// sceMpegAvcInitYCbCr as Persona calls it (run 14, loop at 0x088117F0).
+void test_mpeg_ycbcr_init() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kBuffer = 0x09000000u;
+    m.store32(kBuffer + 16u, 0x12345678u);
+    auto init = [&](std::uint32_t mode, std::uint32_t width, std::uint32_t height, std::uint32_t buffer) {
+        rt.cpu().set_gpr(4, 0x08CC268Cu); rt.cpu().set_gpr(5, mode); rt.cpu().set_gpr(6, width);
+        rt.cpu().set_gpr(7, height); rt.cpu().set_gpr(8, buffer); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceMpeg", 0x67179B1Bu, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(init(1u, 480u, 272u, kBuffer) == 0u);
+    CHECK(!rt.stopped());
+    CHECK(m.load32(kBuffer + 16u) == 0x12345678u); // untouched (PPSSPP behaviour)
+    (void)init(1u, 480u, 272u, 0u);                 // invalid buffer: reported
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceMpegAvcInitYCbCr(mpeg 0x08CC268C, mode 1, 480 x 272, buffer 0x00000000") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -420,6 +442,7 @@ int main() {
     test_subintr_results();
     test_subintr_dispatch();
     test_mpeg_ycbcr_size();
+    test_mpeg_ycbcr_init();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

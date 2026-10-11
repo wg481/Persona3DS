@@ -113,6 +113,12 @@ std::string describe_ycbcr_query(std::uint32_t mpeg, std::uint32_t mode, std::ui
            std::to_string(width) + " x " + std::to_string(height) + ", out " + psprecomp::hex32(result) + ") is not modelled yet";
 }
 
+std::string describe_ycbcr_init(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width, std::uint32_t height,
+                                std::uint32_t buffer) {
+    return "sceMpegAvcInitYCbCr(mpeg " + psprecomp::hex32(mpeg) + ", mode " + std::to_string(mode) + ", " +
+           std::to_string(width) + " x " + std::to_string(height) + ", buffer " + psprecomp::hex32(buffer) + ") is not modelled yet";
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -254,6 +260,17 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             return;
         }
         rt.stop(describe_ycbcr_query(ctx.gpr[4], mode, width, height, result));
+    });
+
+    // sceMpeg::0x67179B1B - sceMpegAvcInitYCbCr: mode 1 with a buffer of the queried size, else report the call.
+    runtime.register_hle("sceMpeg", 0x67179B1Bu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const std::uint32_t mode = ctx.gpr[5], width = ctx.gpr[6], height = ctx.gpr[7], buffer = ctx.gpr[8];
+        const std::uint32_t size = mode == 1u ? mpeg_avc_ycbcr_size_mode1(width, height) : 0u;
+        if (size != 0u && rt.memory().contains(buffer, size)) {
+            ctx.set_gpr(2, 0u);
+            return;
+        }
+        rt.stop(describe_ycbcr_init(ctx.gpr[4], mode, width, height, buffer));
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick
