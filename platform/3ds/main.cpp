@@ -34,6 +34,7 @@
 #include "p3p3ds/hle/fork_media.hpp"
 #include "p3p3ds/hle/fork_movie.hpp"
 #include "fork_mvd.hpp"
+#include "fork_ndsp.hpp"
 #include "gpu_renderer.hpp"
 #include "p3p3ds/ge/async_renderer.hpp"
 #include "psprecomp/elf32.hpp"
@@ -360,6 +361,7 @@ bool update_save_menu(p3p3ds::hle::SavedataUtility &sd, SaveMenu &menu) {
     return true;
 }
 std::uint64_t g_skip_presses = 0;
+p3p3ds::n3ds::NdspOutput *g_ndsp = nullptr; // Persona3DS: sound output, set before the game starts
 
 // Unattended runs (sdmc:/persona3ds/autotest/, for measuring on hardware or in
 // Azahar without anyone at the controls): input.txt is a vblank-keyed input
@@ -620,6 +622,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "linear free : %lu KiB\n"
         "cores  : %s\n"
         "iso    : %s\n"
+        "audio  : %s\n"
         "music  : %lu converted, %lu matched, %lu unmatched\n"
         "movies : %lu converted, %lu matched, %lu unmatched, %lu pictures, %lu audio, %lu failed\n"
         "         %s; decode %.2f ms, copy %.2f ms per picture\n"
@@ -633,6 +636,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         static_cast<unsigned long>(osGetMemRegionFree(MEMREGION_APPLICATION) / 1024u),
         static_cast<unsigned long>(osGetMemRegionSize(MEMREGION_APPLICATION) / 1024u),
         static_cast<unsigned long>(linearSpaceFree() / 1024u), s.cores.c_str(), s.iso.c_str(),
+        g_ndsp != nullptr ? g_ndsp->status().c_str() : "-",
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().entries),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().matched),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().unmatched),
@@ -789,6 +793,10 @@ int main() {
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
         p3p3ds::n3ds::install_mvd_decoder(); // Persona3DS: converted movies on the hardware H.264 decoder
+        // Persona3DS: sound output (fork_ndsp.hpp); the sink runs inside sceAudio calls, pump() once per vblank.
+        static p3p3ds::n3ds::NdspOutput ndsp;
+        g_ndsp = &ndsp;
+        kernel.audio().set_sink([](unsigned, std::uint64_t start_us, const std::vector<std::int16_t> &stereo) { g_ndsp->add(start_us, stereo); });
         p3p3ds::hle::media::fork_media().set_dir(std::string(kBase) + "/media"); // Persona3DS: converted music and movies
         kernel.threads().init_root_thread("root", entry, sp, module->gp);
         std::set<std::uint32_t> stubs;
@@ -867,6 +875,7 @@ int main() {
             const auto vblank = kernel.threads().vblank_count();
             if (vblank == last_presented_vblank) return;
             last_presented_vblank = vblank;
+            g_ndsp->pump(); // Persona3DS: queue complete sound blocks
             // citro3d must be idle on the GE worker before APT may suspend the
             // application (HOME menu); the game already waited for its lists.
             if (g_async != nullptr) g_async->drain();
