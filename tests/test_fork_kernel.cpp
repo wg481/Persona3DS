@@ -572,6 +572,38 @@ void test_umd_deactivate() {
     CHECK(kernel.threads().get_callback(cb)->notify_count == 1);
     CHECK(!rt.stopped());
 }
+
+// sceUmdUnRegisterUMDCallBack: pspautotests umd/api and umd/callbacks
+// (hardware), as Persona uses it after sceUmdDeactivate.
+void test_umd_unregister_callback() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    kernel.threads().init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    auto &m = rt.memory();
+    auto unregister = [&](std::int32_t uid) {
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(uid));
+        rt.invoke_import("sceUmdUser", 0xBD2BDE07u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    const auto sema = kernel.threads().create_sema("sema", 0u, 0, 1);
+    const auto cb = kernel.threads().create_callback("umdHandler", 0x08900000u, 0x1234u);
+    CHECK(unregister(cb) == 0x80010016u);                 // nothing registered yet
+    CHECK(kernel.umd().register_callback(cb, kernel.threads()) == 0u);
+    CHECK(unregister(sema) == 0x80010016u);               // "Unregister semaphore: 80010016"
+    CHECK(unregister(cb) == static_cast<std::uint32_t>(cb)); // "Unregister callback": result == cb
+    CHECK(p3p3ds::hle::fork_umd_callback(kernel) == 0);
+    CHECK(static_cast<std::int32_t>(unregister(cb)) < 0); // umd.expected: the second one fails
+    // sceUmdDeactivate no longer notifies the unregistered callback.
+    constexpr std::uint32_t kDrive = 0x08A65314u;
+    const char name[] = "disc0:";
+    for (std::uint32_t i = 0; i < sizeof name; ++i) m.store8(kDrive + i, static_cast<std::uint8_t>(name[i]));
+    rt.cpu().set_gpr(4, 2u); rt.cpu().set_gpr(5, kDrive);
+    rt.invoke_import("sceUmdUser", 0xE83742BAu, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == 0u);
+    CHECK(kernel.threads().get_callback(cb)->notify_count == 0);
+    CHECK(!rt.stopped());
+}
 } // namespace
 
 int main() {
@@ -617,6 +649,7 @@ int main() {
     test_mpeg_avc_csc();
     test_terminate_delete_thread();
     test_umd_deactivate();
+    test_umd_unregister_callback();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

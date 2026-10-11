@@ -239,6 +239,21 @@ struct MemoryStickInfo {
 // READABLE (0x32) afterwards.
 [[nodiscard]] std::uint32_t umd_deactivate_result(std::uint32_t mode, const std::string &drive) noexcept;
 
+// sceUmdUser 0xBD2BDE07 sceUmdUnRegisterUMDCallBack(cbid). Added ahead of
+// the game reaching it (maintainer's request, 2026-10-11): the code after
+// Persona's sceUmdDeactivate ([INFERRED] stub 0x089813EC, called from
+// 0x088152A0 with $a0 = the UMD callback id at 0x08A67E50) unregisters the
+// callback before deleting it; $v0 is not read there. Results [VERIFIED]
+// pspautotests umd/api/api.expected (the registered callback -> its own id;
+// a semaphore -> 0x80010016) and umd/callbacks/umd.expected (a second
+// unregister fails). uOFW mediaman.c returns 0 instead for SDK >= 3.00
+// [UNVERIFIED which firmware]; the hardware value is used. Upstream's
+// UmdState cannot clear its callback from fork code, so the fork records
+// the unregistered id: sceUmdDeactivate no longer notifies it, but
+// upstream's sceUmdActivate still would, and re-registering the same id
+// afterwards is not seen here [INFERRED: neither is observed].
+[[nodiscard]] std::int32_t fork_umd_callback(const KernelState &kernel) noexcept; // 0 = none
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

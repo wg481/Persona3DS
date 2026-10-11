@@ -150,6 +150,7 @@ std::uint32_t umd_deactivate_result(std::uint32_t mode, const std::string &drive
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
+std::int32_t g_umd_unregistered = 0; // UMD callback id unregistered through the fork
 constexpr std::uint64_t kInterruptCheckDispatches = 32u; // dispatch boundaries between vblank checks
 constexpr std::uint32_t kVblankInterrupt = 30u;
 
@@ -177,6 +178,12 @@ void start_handlers(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, int
     s.in_handler = false;
 }
 } // namespace
+
+std::int32_t fork_umd_callback(const KernelState &kernel) noexcept {
+    const auto registered = kernel.umd().registered_callback();
+    return registered != g_umd_unregistered ? registered : 0;
+}
+
 
 std::uint32_t VblankSubInterrupts::register_handler(std::int32_t no, std::uint32_t handler, std::uint32_t arg, std::uint32_t gp) noexcept {
     if (no < 0 || no >= 32) return kInvalid;
@@ -226,6 +233,7 @@ bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexCo
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
     g_vblank_subintr = VblankSubInterrupts{};
+    g_umd_unregistered = 0;
     psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
     const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
         runtime.register_hle("InterruptManager", nid, [fn](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
@@ -389,8 +397,18 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         const std::uint32_t result = umd_deactivate_result(mode, drive);
         ctx.set_gpr(2, result);
         rt.event("umd_deactivate", {{"mode", mode}, {"drive_ptr", drive_ptr}, {"result", result}});
-        if (result == 0u && kernel.umd().registered_callback() != 0)
-            (void)kernel.threads().notify_callback(rt, kernel.umd().registered_callback(), 0x12u);
+        if (result == 0u && fork_umd_callback(kernel) != 0)
+            (void)kernel.threads().notify_callback(rt, fork_umd_callback(kernel), 0x12u);
+    });
+
+    // sceUmdUser::0xBD2BDE07 - sceUmdUnRegisterUMDCallBack
+    runtime.register_hle("sceUmdUser", 0xBD2BDE07u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+        const bool registered = uid != 0 && uid == fork_umd_callback(kernel);
+        if (registered) g_umd_unregistered = uid;
+        const std::uint32_t result = registered ? static_cast<std::uint32_t>(uid) : 0x80010016u;
+        ctx.set_gpr(2, result);
+        rt.event("umd_callback_unregister", {{"uid", ctx.gpr[4]}, {"result", result}});
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick
