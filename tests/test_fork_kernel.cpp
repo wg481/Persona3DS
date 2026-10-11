@@ -876,6 +876,9 @@ void test_poll_event_flag_nid() {
     CHECK(poll(flag, 1u, 0x21u, 0u) == 0x800201AFu);                                  // bit 0 now clear: EVF_COND
     CHECK(poll(0, 1u, 0x01u, 0u) == 0x8002019Au);                                     // unknown id
     CHECK(!rt.stopped());
+    // sceKernelTotalFreeMemSize under its real NID returns upstream's value.
+    rt.invoke_import("SysMemUserForUser", 0xF919F628u, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == kernel.sysmem().total_free_memory() && !rt.stopped());
 }
 } // namespace
 

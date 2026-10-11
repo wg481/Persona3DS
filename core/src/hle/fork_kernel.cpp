@@ -699,6 +699,13 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
                                                                                     ctx.gpr[5], ctx.gpr[6], ctx.gpr[7])));
     });
 
+    // SysMemUserForUser::0xF919F628 - sceKernelTotalFreeMemSize. Upstream's sysmem.cpp registers it
+    // under 0xF9100EB9, which no reference knows (PSPSDK SysMemUserForUser.S, PPSSPP, uOFW sysmem
+    // exports.exp: 0xF919F628). Persona does not import it; registered so the call is reachable.
+    runtime.register_hle("SysMemUserForUser", 0xF919F628u, [&kernel](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+        ctx.set_gpr(2, kernel.sysmem().total_free_memory());
+    });
+
     // sceRtc::0x6FF40ACC - sceRtcGetTick
     runtime.register_hle("sceRtc", 0x6FF40ACCu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const std::uint32_t date = ctx.gpr[4], tick = ctx.gpr[5]; // $a0, $a1
