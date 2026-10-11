@@ -769,6 +769,36 @@ void test_exit_game() {
     rt.invoke_import("LoadExecForUser", 0x05572A5Fu, rt.cpu());
     CHECK(rt.stopped() && rt.stop_reason() == "Game exit: sceKernelExitGame");
 }
+
+// sceIoRename: pspautotests io/file/rename.expected error cases.
+void test_io_rename() {
+    using p3p3ds::hle::io_rename_static_result;
+    CHECK(io_rename_static_result("ms0:/__iorename_test*.txt", "ms0:/a.txt") == 0x80010016u); // wild -> rel
+    CHECK(io_rename_static_result("ms0:/a.txt", "ms0:/__iorename_test?.txt") == 0x80010016u);
+    CHECK(io_rename_static_result("ms0:/a.txt", "host0:/a.txt") == 0x80020322u);            // cross device
+    CHECK(!io_rename_static_result("ms0:/a.txt", "ms0:/b.txt").has_value());
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    const auto dir = std::filesystem::path(P3P_SOURCE_DIR) / "tests";
+    kernel.io().mount("ms0:", std::make_shared<p3p3ds::vfs::HostFileSystem>(dir));
+    auto &m = rt.memory();
+    auto rename = [&](const char *from, const char *to) {
+        for (std::uint32_t i = 0;; ++i) { m.store8(0x08900000u + i, static_cast<std::uint8_t>(from[i])); if (!from[i]) break; }
+        for (std::uint32_t i = 0;; ++i) { m.store8(0x08900200u + i, static_cast<std::uint8_t>(to[i])); if (!to[i]) break; }
+        rt.cpu().set_gpr(4, 0x08900000u); rt.cpu().set_gpr(5, 0x08900200u);
+        rt.invoke_import("IoFileMgrForUser", 0x779103A0u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(rename("ms0:/_DOES_NOT_EXIST/x.txt", "ms0:/y.txt") == 0x80010002u); // bad src path
+    CHECK(rename("ms0:/__iorename_test3.txt", "ms0:/a.txt") == 0x80010002u);  // bad src file
+    CHECK(rename("ms0:/a.txt", "host0:/a.txt") == 0x80020322u);
+    CHECK(!rt.stopped());
+    (void)rename("ms0:/test_fork_kernel.cpp", "ms0:/renamed.cpp"); // existing file: not modelled
+    CHECK(rt.stopped());
+    CHECK(std::filesystem::exists(dir / "test_fork_kernel.cpp"));
+}
 } // namespace
 
 int main() {
@@ -820,6 +850,7 @@ int main() {
     test_umd_wait_drive_stat();
     test_module_stop_unload();
     test_exit_game();
+    test_io_rename();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

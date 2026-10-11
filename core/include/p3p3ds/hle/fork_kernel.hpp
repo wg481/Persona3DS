@@ -323,6 +323,17 @@ inline constexpr std::uint64_t kVblankLengthUs = 732u;
 inline constexpr std::uint32_t kMainModuleId = 1u;
 inline constexpr std::uint32_t kModuleStopNid = 0xCEE8593Cu;
 
+// IoFileMgrForUser 0x779103A0 sceIoRename(old, new). Imported by Persona;
+// added ahead of the game reaching it. [VERIFIED] pspautotests
+// io/file/rename.expected (hardware): a wildcard (* or ?) in either path ->
+// 0x80010016; different devices -> 0x80020322; a missing source ->
+// 0x80010002; an existing target, a missing target directory or the same
+// path -> 0x80010011; otherwise 0. Upstream's IoFileMgr has no writable
+// files (sceIoWrite to a file returns a bad descriptor), so only the error
+// cases that need no write are modelled; renaming an existing file, and
+// relative paths (no current directory), stop the run and name the call.
+[[nodiscard]] std::optional<std::uint32_t> io_rename_static_result(const std::string &from, const std::string &to); // nullopt: needs the files
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

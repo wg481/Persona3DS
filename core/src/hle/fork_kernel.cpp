@@ -196,6 +196,19 @@ std::optional<ModuleLayout> module_layout(psprecomp::Runtime &rt, KernelState &k
 }
 } // namespace
 
+std::optional<std::uint32_t> io_rename_static_result(const std::string &from, const std::string &to) {
+    if (from.find_first_of("*?") != std::string::npos || to.find_first_of("*?") != std::string::npos) return 0x80010016u;
+    const auto from_colon = from.find(':'), to_colon = to.find(':');
+    if (from_colon == std::string::npos || to_colon == std::string::npos) return std::nullopt; // relative
+    auto device = [](const std::string &path, std::size_t colon) {
+        std::string d = path.substr(0, colon);
+        for (auto &ch : d) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return d;
+    };
+    if (device(from, from_colon) != device(to, to_colon)) return 0x80020322u;
+    return std::nullopt;
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -596,6 +609,24 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
     // LoadExecForUser::0x05572A5F - sceKernelExitGame
     runtime.register_hle("LoadExecForUser", 0x05572A5Fu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &) {
         rt.stop("Game exit: sceKernelExitGame");
+    });
+
+    // IoFileMgrForUser::0x779103A0 - sceIoRename(old, new)
+    runtime.register_hle("IoFileMgrForUser", 0x779103A0u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t from_ptr = ctx.gpr[4], to_ptr = ctx.gpr[5];
+        if (!m.contains(from_ptr, 1u) || !m.contains(to_ptr, 1u)) { // a PSP crashes on NULL (rename.c)
+            rt.stop("sceIoRename(" + psprecomp::hex32(from_ptr) + ", " + psprecomp::hex32(to_ptr) + ") with an invalid path pointer");
+            return;
+        }
+        const auto from = m.read_c_string(from_ptr, 1024u), to = m.read_c_string(to_ptr, 1024u);
+        rt.event("io_rename", {}, from + " -> " + to);
+        if (const auto result = io_rename_static_result(from, to)) { ctx.set_gpr(2, *result); return; }
+        if (from.find(':') != std::string::npos) {
+            const auto resolved = kernel.io().resolve(from);
+            if (!resolved || !resolved->fs->stat(resolved->path)) { ctx.set_gpr(2, 0x80010002u); return; } // no such source
+        }
+        rt.stop("sceIoRename(\"" + from + "\", \"" + to + "\") of an existing or relative file is not modelled yet");
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick
