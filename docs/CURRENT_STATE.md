@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Milestone: sound on the New 3DS; movie flicker narrowed (2026-10-11)
+
+- [VERIFIED] Maintainer's New 3DS (`07f8f099`, report label stale): sound plays (game sounds, converted music: `music : 2 matched`; movie audio: 41 units). Report: 59.9 fps, 90 % of real time overall, 99 % in the last 10 s (48 % idle), `audio : ndsp ok, 2232 blocks, 795999 late, 119298 skipped, 147 gaps`, heap 52,639 KiB in use, linear free 7,884 KiB, no failed allocation. Open: 795,999 frames of PCM arrived for virtual times before the play cursor and were dropped (about a third of the 2,285,568 frames played) and the skip-forward rule fired (119,298 frames); [INFERRED] the cursor is pushed ahead by one channel's buffers (`newest_` jumps when a channel queues ahead or after a slow stretch), dropping the other channels' later-arriving buffers. Next step: hold the cursor to the slowest active channel (or a fixed latency behind the newest buffer) and compare the late count.
+- [VERIFIED] 3DS frame dumps during the opening movie (`dump_every.txt` = 7, vblanks 819 / 826 / 833 / 840): odd vblanks show the decoded movie picture correctly (girl, "persona" logo), even vblanks a black frame with a few white pixels in the top-left corner. The game flips between its two framebuffers (0x04000000 / 0x04088000) every vblank during the movie and on PC both hold the picture (run 25 events: same hash at both addresses), so on the 3DS one of the two framebuffers never receives the movie draws. Cause open; the next test is `no_gpu_thread.txt` (GE on core 0) during the movie: no flicker would point at the GE worker reading the Csc texture at the wrong time.
+- 3DS movie cost per picture: MVD decode 15.07 ms, copy 2.75 ms; texture upload of the 1 MiB movie texture on core 2.
+
 ## New 3DS sound output (NDSP); movie timings (2026-10-11)
 
 - [VERIFIED] The 3DS runner had no sound output at all: no NDSP code in `platform/3ds/` (`grep -rn ndsp platform/3ds` empty before this change) and `docs/3DS_PLATFORM.md` section 8 says "Software rendering, no audio". The game's sceAudio output, including the converted music and movie audio, was produced and dropped. That is the maintainer's "no audio on 3DS".
