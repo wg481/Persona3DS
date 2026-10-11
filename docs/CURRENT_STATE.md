@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 15 and New 3DS run 5; blocker 12: sceKernelReferEventFlagStatus (2026-10-11)
+
+- [VERIFIED] Blocker 11 is cleared on both targets: `sceMpegAvcInitYCbCr` returned 0 for every buffer. PC run 15 (maintainer, `d978e52d`, CTest 28/28 on Windows): the movie player starts three threads, `displayThread` (uid 18, entry `0x08813A78`, priority 65), `readThread` (uid 19, `0x0881329C`, 64) and `soundThread` (uid 20, `0x08813464`, 61). New 3DS run 5: 584 frames, 59.9 fps, 99 % of real time in the last 10 s.
+- [VERIFIED] Both stop at the missing import `ThreadManForUser::0xA66B0120` (`sceKernelReferEventFlagStatus`, stub `0x08981064`), called by `user_main` from `0x088146BC`: `$a0` = the event flag id at `*(*($s1 + 12))`, `$a1 = $sp` with `info->size = 52` stored in the delay slot. The same call follows at `0x088146D0` and `0x08814700`; the game then tests a pattern bit of the result (`ext` at `0x088146DC`).
+- Semantics: uOFW has not reversed this function. [VERIFIED] pspautotests `threads/events/refer.expected` and `create.expected` (hardware): an unknown, NULL or deleted id gives `0x8002019A`; size 0 gives 0 with nothing written; any other size gives 0 and size becomes 52; the 52-byte info is size, name (31 characters + NUL), attr, init pattern, current pattern, number of waiting threads.
+- Implementation in `core/src/hle/fork_kernel.cpp`, reading the event flags upstream's `ThreadManager` already keeps: ids, size 0 and size 52 as above. The test does not show how many bytes other sizes write, so they stop and name the call, as does an info outside guest memory (a crash on a PSP).
+- [VERIFIED] `tests/test_fork_kernel.cpp`: all fields for a flag with attr 0x200 and pattern 0x29, 31-character name truncation, size 0, the id errors, and size 8 reported. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
 ## Persona run 14 and New 3DS run 4; blocker 11: sceMpegAvcInitYCbCr (2026-10-11)
 
 - [VERIFIED] Blocker 10 is cleared on both targets: `sceMpegAvcQueryYCbCrSize` returned 0 and the game moved on. PC run 14 (maintainer, `5265e939`, CTest 28/28 on Windows): frames, audio and event counts as in run 13. New 3DS run 4: 713 frames, 59.9 fps, 99 % of real time in the last 10 s, no failed allocation.

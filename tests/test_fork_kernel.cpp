@@ -403,6 +403,48 @@ void test_mpeg_ycbcr_init() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceMpegAvcInitYCbCr(mpeg 0x08CC268C, mode 1, 480 x 272, buffer 0x00000000") != std::string::npos);
 }
+
+// sceKernelReferEventFlagStatus: pspautotests threads/events/refer and
+// create (hardware), and Persona's call (run 15: info->size = 52).
+void test_refer_event_flag() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kInfo = 0x09FEF800u;
+    auto refer = [&](std::int32_t uid, std::uint32_t size) {
+        m.store32(kInfo, size);
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(uid)); rt.cpu().set_gpr(5, kInfo);
+        rt.invoke_import("ThreadManForUser", 0xA66B0120u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    const auto flag = kernel.threads().create_event_flag("create2", 0x200u, 1u | 8u | 32u);
+    for (std::uint32_t i = 4; i < 52u; i += 4) m.store32(kInfo + i, 0xCCCCCCCCu);
+    CHECK(refer(flag, 52u) == 0u);
+    CHECK(m.load32(kInfo) == 52u);
+    CHECK(m.read_c_string(kInfo + 4u, 32u) == "create2");
+    CHECK(m.load32(kInfo + 4u + 28u) == 0u); // name padded with zeros
+    CHECK(m.load32(kInfo + 36u) == 0x200u);
+    CHECK(m.load32(kInfo + 40u) == 0x29u && m.load32(kInfo + 44u) == 0x29u);
+    CHECK(m.load32(kInfo + 48u) == 0u);
+    CHECK(!rt.stopped());
+    // "Long name": 31 characters are kept.
+    const auto lng = kernel.threads().create_event_flag("12345678901234567890123456789012", 0u, 0u);
+    CHECK(refer(lng, 52u) == 0u);
+    CHECK(m.read_c_string(kInfo + 4u, 32u) == "1234567890123456789012345678901");
+    // refer.expected: size 0 -> result 0, size stays 0.
+    m.store32(kInfo + 36u, 0xDEADBEEFu);
+    CHECK(refer(flag, 0u) == 0u);
+    CHECK(m.load32(kInfo) == 0u && m.load32(kInfo + 36u) == 0xDEADBEEFu);
+    // NULL / Invalid / Deleted -> 0x8002019A.
+    CHECK(refer(0, 52u) == 0x8002019Au);
+    CHECK(refer(static_cast<std::int32_t>(0xDEADBEEFu), 52u) == 0x8002019Au);
+    CHECK(!rt.stopped());
+    // Sizes other than 0 and 52 are not modelled: reported.
+    (void)refer(flag, 8u);
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceKernelReferEventFlagStatus(uid " + std::to_string(flag) + ", info 0x09FEF800, size 8)") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -443,6 +485,7 @@ int main() {
     test_subintr_dispatch();
     test_mpeg_ycbcr_size();
     test_mpeg_ycbcr_init();
+    test_refer_event_flag();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

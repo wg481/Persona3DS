@@ -119,6 +119,11 @@ std::string describe_ycbcr_init(std::uint32_t mpeg, std::uint32_t mode, std::uin
            std::to_string(width) + " x " + std::to_string(height) + ", buffer " + psprecomp::hex32(buffer) + ") is not modelled yet";
 }
 
+std::string describe_refer_event_flag(std::int32_t uid, std::uint32_t info, std::uint32_t size) {
+    return "sceKernelReferEventFlagStatus(uid " + std::to_string(uid) + ", info " + psprecomp::hex32(info) + ", size " +
+           std::to_string(size) + ") is not modelled yet";
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -271,6 +276,29 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             return;
         }
         rt.stop(describe_ycbcr_init(ctx.gpr[4], mode, width, height, buffer));
+    });
+
+    // ThreadManForUser::0xA66B0120 - sceKernelReferEventFlagStatus: size 0 or 52, else report the call.
+    runtime.register_hle("ThreadManForUser", 0xA66B0120u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+        const std::uint32_t info = ctx.gpr[5];
+        const auto *flag = kernel.threads().get_event_flag(uid);
+        if (flag == nullptr) { ctx.set_gpr(2, 0x8002019Au); return; } // SCE_KERNEL_ERROR_UNKNOWN_EVFID
+        const std::uint32_t size = m.contains(info, 4u) ? m.load32(info) : 0xFFFFFFFFu;
+        if (size == 0u) { ctx.set_gpr(2, 0u); return; }
+        constexpr std::uint32_t kInfoSize = 52u;
+        if (size != kInfoSize || !m.contains(info, kInfoSize)) {
+            rt.stop(describe_refer_event_flag(uid, info, size));
+            return;
+        }
+        for (std::uint32_t i = 0; i < 32u; ++i)
+            m.store8(info + 4u + i, i < flag->name.size() && i < 31u ? static_cast<std::uint8_t>(flag->name[i]) : 0u);
+        m.store32(info + 36u, flag->attr);
+        m.store32(info + 40u, flag->init);
+        m.store32(info + 44u, flag->bits);
+        m.store32(info + 48u, static_cast<std::uint32_t>(flag->waiters.size()));
+        ctx.set_gpr(2, 0u);
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

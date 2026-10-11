@@ -164,6 +164,18 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_ycbcr_init(std::uint32_t mpeg, std::uint32_t mode, std::uint32_t width,
                                               std::uint32_t height, std::uint32_t buffer);
 
+// ThreadManForUser 0xA66B0120 sceKernelReferEventFlagStatus(evid, info).
+// Persona (PC run 15, New 3DS run 5) calls it from 0x088146BC in its movie
+// player, with info->size = 52 written just before. uOFW has not reversed it;
+// results [VERIFIED] pspautotests threads/events/refer + create (hardware):
+// unknown, NULL or deleted id -> 0x8002019A; size 0 -> 0 with nothing
+// written; any other size -> 0 and size becomes 52; with size 52 the info is
+// {size, name[32] (31 chars + NUL), attr, initPattern, currentPattern,
+// numWaitThreads}. How much is written for sizes 1..51 or above 52 is not
+// shown by the test, so those (and an info not in guest memory, which
+// crashes a PSP) stop the run and name the call.
+[[nodiscard]] std::string describe_refer_event_flag(std::int32_t uid, std::uint32_t info, std::uint32_t size);
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).
