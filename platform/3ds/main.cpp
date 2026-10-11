@@ -877,6 +877,17 @@ int main() {
             if (vblank == last_presented_vblank) return;
             last_presented_vblank = vblank;
             g_ndsp->pump(); // Persona3DS: queue complete sound blocks
+            // Persona3DS: sdmc:/persona3ds/draw_trace.txt -> trace 8 presents of the movie once 60 pictures were
+            // shown, into draw_trace_out.txt (one line per draw / upload / present; movie flicker evidence).
+            static bool trace_checked = false;
+            if (!trace_checked && p3p3ds::hle::media::fork_movies().stats().pictures >= 60u) {
+                trace_checked = true;
+                if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/draw_trace.txt", "r")) {
+                    std::fclose(f);
+                    if (g_async != nullptr) g_async->post([](p3p3ds::ge::GeRenderer &) { g_gpu->start_trace(P3P_PROFILE_SD_BASE "/draw_trace_out.txt", 8u); });
+                    else g_gpu->start_trace(P3P_PROFILE_SD_BASE "/draw_trace_out.txt", 8u);
+                }
+            }
             // citro3d must be idle on the GE worker before APT may suspend the
             // application (HOME menu); the game already waited for its lists.
             if (g_async != nullptr) g_async->drain();

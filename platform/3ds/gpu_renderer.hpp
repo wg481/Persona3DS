@@ -23,6 +23,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <atomic>
 #include <unordered_map>
 #include <string>
@@ -79,6 +80,9 @@ public:
     [[nodiscard]] const GpuStats &gpu_stats() const { return gpu_stats_; }
     // P3P3DS: "address draws/presents/cpu-presents" per render target, for the report.
     [[nodiscard]] std::string target_text() const;
+    // P3P3DS: write one line per draw (target, texture, blend, fixed colours, vertex
+    // ranges) and per present to `path` for the next `presents` presents (movie flicker).
+    void start_trace(const char *path, unsigned presents);
     [[nodiscard]] const ge::VertexCacheStats &vertex_cache_stats() const { return vertex_cache_.stats(); }
     [[nodiscard]] bool vertex_cache_enabled() const { return vertex_cache_enabled_; }
     // The last presented picture came from guest memory (CPU-written, e.g. a movie frame).
@@ -225,6 +229,8 @@ private:
     bool bound_screen_{};
     std::unordered_map<std::uint64_t, CachedTexture> textures_;
     std::vector<C3D_Tex> deferred_free_;
+    std::FILE *trace_{};      // P3P3DS: draw trace (start_trace)
+    unsigned trace_left_{};
     std::uint32_t texture_bytes_{};
     std::uint8_t *arena_{};       // linear memory for vertices and indices of the open GPU frame
     std::uint32_t arena_used_{};

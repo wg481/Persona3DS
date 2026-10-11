@@ -531,6 +531,10 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
             entry.checked_frame = frame_;
             texture_bytes_ += bytes;
             ++gpu_stats_.texture_uploads;
+            if (trace_ != nullptr) // P3P3DS: draw trace
+                std::fprintf(trace_, "upload %08lx %lux%lu fmt %lu hash %016llx direct %d\n", static_cast<unsigned long>(info.address),
+                             static_cast<unsigned long>(tw), static_cast<unsigned long>(th), static_cast<unsigned long>(info.format),
+                             static_cast<unsigned long long>(hash), direct != nullptr ? 1 : 0);
             gpu_stats_.texture_bytes += bytes;
             it = textures_.emplace(key, entry).first;
         }
@@ -827,6 +831,26 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     add(gpu_stats_.prep_ticks, prep_start, vertex_start);
 
     ge::decode_screen_vertices(memory, regs, count, vertex_address, index_address, screen_);
+    if (trace_ != nullptr && !screen_.empty()) { // P3P3DS: draw trace (start_trace)
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+        unsigned clipped = 0;
+        for (const auto &v : screen_) {
+            x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+            u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
+            clipped += v.clipped ? 1u : 0u;
+        }
+        const auto ti = ge::texture_info(regs);
+        const auto &c = screen_.front().color;
+        std::fprintf(trace_, "draw fb %08lx prim %u n %lu tex %s %08lx %lux%lu fmt %lu bound %d blend %d:%06lx E0 %06lx E1 %06lx tfunc %06lx clear %lu "
+                             "x %.1f..%.1f y %.1f..%.1f u %.1f..%.1f v %.1f..%.1f rgba %02x%02x%02x%02x clipped %u vtype %06lx\n",
+                     static_cast<unsigned long>(color_address), static_cast<unsigned>(prim), static_cast<unsigned long>(count),
+                     textured ? "on" : "off", static_cast<unsigned long>(ti.address), static_cast<unsigned long>(ti.width),
+                     static_cast<unsigned long>(ti.height), static_cast<unsigned long>(ti.format), tex != nullptr ? 1 : 0,
+                     on(regs, 0x21) ? 1 : 0, static_cast<unsigned long>(r24(regs, 0xDF)), static_cast<unsigned long>(r24(regs, 0xE0)),
+                     static_cast<unsigned long>(r24(regs, 0xE1)), static_cast<unsigned long>(r24(regs, 0xC9)),
+                     static_cast<unsigned long>(r24(regs, 0xD3)), x0, x1, y0, y1, u0, u1, v0, v1, c[0], c[1], c[2], c[3], clipped,
+                     static_cast<unsigned long>(r24(regs, 0x12)));
+    }
 
     const bool flat = (r24(regs, 0x50) & 1u) == 0u;
     std::uint32_t emitted = 0;
@@ -1184,6 +1208,11 @@ void GpuRenderer::present(psprecomp::GuestMemory &memory, const hle::DisplayFram
             source = &fallback_;
         }
         if (t != nullptr) { ++t->presents; if (cpu) ++t->cpu_presents; } // P3P3DS: per-target counters (report)
+        if (trace_ != nullptr) { // P3P3DS: draw trace
+            std::fprintf(trace_, "present %08lx %s gpu_seq %llu cpu_seq %llu\n", static_cast<unsigned long>(address), cpu ? "cpu" : "gpu",
+                         static_cast<unsigned long long>(t != nullptr ? t->gpu_seq : 0u), static_cast<unsigned long long>(t != nullptr ? t->cpu_seq : 0u));
+            if (--trace_left_ == 0u) { std::fclose(trace_); trace_ = nullptr; }
+        }
     }
     if (!cpu && source == shown_ && source_seq == shown_seq_) {
         ++gpu_stats_.skipped_presents;
@@ -1248,6 +1277,12 @@ std::string GpuRenderer::target_text() const {
         text += line;
     }
     return text;
+}
+
+void GpuRenderer::start_trace(const char *path, unsigned presents) {
+    if (trace_ != nullptr || presents == 0u) return;
+    trace_ = std::fopen(path, "w");
+    trace_left_ = presents;
 }
 
 } // namespace p3p3ds::n3ds
