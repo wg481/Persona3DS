@@ -9,6 +9,7 @@ This is the current source of truth, newest entries first. Since 2026-10-11 this
 - [INFERRED] cause: the renderer's texture budget (`kTextureBudget`, 6 MiB) is half the frame's working set, so `evict_textures` drops textures every frame and they are re-uploaded (the time), and when a 1 MiB `C3D_TexInit` fails in the 12 MiB linear heap `bind_texture` returns null and the draw is skipped (the missing elements). The falling "linear free" in earlier reports (6,605 -> 253 KiB) fits textures filling the budget.
 - Fix (`P3P3DS:` patch): `kTextureBudget` 6 -> 18 MiB in `platform/3ds/gpu_renderer.cpp`, and `__ctru_linear_heap_size` 12 -> 28 MiB in `platform/3ds/main.cpp`. The normal heap drops from 93.7 to about 77.7 MiB; the highest in-use value in the maintainer's 3DS reports is 56.7 MiB (in-game), so about 21 MiB of margin remains. [UNVERIFIED] on hardware until the next 3DS title-screen report (expected: full title screen, uploads stop growing while on it).
 - Renderer patches in this fork (`P3P3DS:` markers): `gpu_renderer.cpp` `kTextureBudget`.
+- [VERIFIED] Maintainer's New 3DS screenshot on `c55c33f8` (2026-10-11): the title screen now shows everything the PC frame 2400 shows (background, crowd silhouettes, light shafts, purple glow, button bar, logo, copyright). Frame rate and upload count not reported yet.
 
 ## Maintainer decisions: renderer edits, media conversion (2026-10-11)
 
