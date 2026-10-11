@@ -841,6 +841,41 @@ void test_msgdialog() {
     CHECK(call(0x9A1C91D7u) == 4u);                 // FINISHED once
     CHECK(call(0x9A1C91D7u) == 0u);
     CHECK(!rt.stopped());
+    // A dialog polled while VISIBLE for 600 vblanks without Update stops the run.
+    CHECK(call(0x2AD8E239u, kParams) == 0u);
+    CHECK(call(0x9A1C91D7u) == 1u);
+    CHECK(call(0x9A1C91D7u) == 2u);
+    for (int k = 0; k < 10200000 && !rt.stopped(); ++k) {
+        if (k % 1000 == 0) (void)call(0x9A1C91D7u);
+        kernel.threads().on_syscall_return(rt, rt.cpu());
+    }
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason().find("sceUtilityMsgDialog stays VISIBLE") != std::string::npos);
+}
+
+// sceKernelPollEventFlag under its real NID (0x30FD48F0): pspautotests
+// threads/events/poll.expected, and Persona's thread BGM call (run 20:
+// bits 1, mode 0x21 = OR | CLEAR (PSPSDK pspthreadman.h), no out pointer).
+void test_poll_event_flag_nid() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    auto poll = [&](std::int32_t id, std::uint32_t bits, std::uint32_t mode, std::uint32_t out) {
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(id)); rt.cpu().set_gpr(5, bits);
+        rt.cpu().set_gpr(6, mode); rt.cpu().set_gpr(7, out);
+        rt.invoke_import("ThreadManForUser", 0x30FD48F0u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    const auto flag = kernel.threads().create_event_flag("poll1", 0u, 0xFFFFFFFFu);
+    constexpr std::uint32_t kOut = 0x08900000u;
+    m.store32(kOut, 0xDEADBEEFu);
+    CHECK(poll(flag, 0u, 0x20u, kOut) == 0x800201B1u && m.load32(kOut) == 0xDEADBEEFu); // "Clear 0x00000000: Failed (800201B1)"
+    CHECK(poll(flag, 1u, 0x21u, 0u) == 0u);                                           // Persona's call, no out bits
+    CHECK(kernel.threads().get_event_flag(flag)->bits == 0xFFFFFFFEu);                // "Clear/Or 0x00000001": cur=FFFFFFFE
+    CHECK(poll(flag, 1u, 0x21u, 0u) == 0x800201AFu);                                  // bit 0 now clear: EVF_COND
+    CHECK(poll(0, 1u, 0x01u, 0u) == 0x8002019Au);                                     // unknown id
+    CHECK(!rt.stopped());
 }
 } // namespace
 
@@ -895,6 +930,7 @@ int main() {
     test_exit_game();
     test_io_rename();
     test_msgdialog();
+    test_poll_event_flag_nid();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

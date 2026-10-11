@@ -652,14 +652,20 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
                   << " text=\"" << text << "\"\n";
         ctx.set_gpr(2, 0u);
     });
-    runtime.register_hle("sceUtility", 0x9A1C91D7u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { // GetStatus
+    runtime.register_hle("sceUtility", 0x9A1C91D7u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { // GetStatus
         auto &d = g_msgdialog;
+        const auto now = kernel.threads().vblank_count();
         if (d.status == 1) {
             if (d.init_reported) {
                 d.status = 2;
+                d.visible_since = now;
                 if (rt.memory().contains(d.param + 48u, 4u)) rt.memory().store32(d.param + 48u, 0u); // "Result -> 00000000"
             }
             d.init_reported = true;
+        } else if (d.status == 2 && now - d.visible_since >= kMsgDialogStallVblanks) {
+            rt.stop("sceUtilityMsgDialog stays VISIBLE: no sceUtilityMsgDialogUpdate call in " + std::to_string(kMsgDialogStallVblanks) +
+                    " vblanks (the dialog only advances in Update)");
+            return;
         } else if (d.status == 4) {
             if (d.shutdown_reported) d.status = 0;
             else { d.shutdown_reported = true; ctx.set_gpr(2, 4u); return; }
@@ -682,6 +688,15 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         g_msgdialog.status = 4;
         g_msgdialog.shutdown_reported = false;
         ctx.set_gpr(2, 0u);
+    });
+
+    // ThreadManForUser::0x30FD48F0 - sceKernelPollEventFlag(evid, bits, mode, *outBits). Upstream
+    // registers its poll under 0x30FD7D3A, which no reference knows (PSPSDK ThreadManForUser.S,
+    // uOFW threadman exports.exp and PPSSPP all give 0x30FD48F0), so the game's import was
+    // unbound (PC run 20 / New 3DS run 10, thread BGM). Same ThreadManager implementation.
+    runtime.register_hle("ThreadManForUser", 0x30FD48F0u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        ctx.set_gpr(2, static_cast<std::uint32_t>(kernel.threads().poll_event_flag(rt.memory(), static_cast<std::int32_t>(ctx.gpr[4]),
+                                                                                    ctx.gpr[5], ctx.gpr[6], ctx.gpr[7])));
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

@@ -352,10 +352,17 @@ inline constexpr std::uint32_t kModuleStopNid = 0xCEE8593Cu;
 // (`msgdialog` event and console) so the run shows what the game said.
 // Out-of-sequence calls return 0x80110001 [INFERRED, as upstream savedata];
 // InitStart while the savedata dialog is active stops and names the call.
+// Persona's EBOOT has no direct call to sceUtilityMsgDialogUpdate
+// (tools/p1_callsites.py, 2026-10-11: 0 jal sites; it may be called
+// indirectly). A dialog only advances in Update, so a dialog still VISIBLE
+// kMsgDialogStallVblanks after it became visible, with no Update call, stops
+// the run with a message instead of letting the game poll forever.
+inline constexpr std::uint64_t kMsgDialogStallVblanks = 600u; // 10 s
 struct MsgDialogState {
     int status{};                         // 0 none, 1 init, 2 visible, 3 quit, 4 finished
     bool init_reported{}, shutdown_reported{};
     std::uint32_t param{}, size{};
+    std::uint64_t visible_since{};        // vblank count when VISIBLE was first reported
 };
 inline constexpr std::uint32_t kMsgDialogOptionYesNo = 0x10u, kMsgDialogOptionDefaultNo = 0x100u;
 [[nodiscard]] constexpr std::uint32_t msgdialog_default_button(std::uint32_t options) noexcept {
