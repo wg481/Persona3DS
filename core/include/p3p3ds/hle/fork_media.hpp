@@ -8,6 +8,7 @@
 //
 // Index (<media dir>/index.txt), one entry per line, '#' starts a comment:
 //   atrac <prefix bytes> <FNV-1a 64 of those bytes, hex> <sample offset> <file>
+//   movie ... (fork_movie.hpp)
 // The sample offset is added to the ATRAC library's raw sample position
 // (decodePos) to get the position in the converted file.
 #include <cstdint>

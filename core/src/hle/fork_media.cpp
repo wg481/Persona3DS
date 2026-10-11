@@ -1,6 +1,8 @@
 // Converted media for the Persona3DS fork: see fork_media.hpp.
 #include "p3p3ds/hle/fork_media.hpp"
 
+#include "p3p3ds/hle/fork_movie.hpp"
+
 #include "psprecomp/guest_memory.hpp"
 
 #include <algorithm>
@@ -146,6 +148,7 @@ void Library::set_dir(const std::string &dir) {
     dir_ = dir;
     atrac_.clear();
     stats_ = {};
+    fork_movies().clear();
     std::ifstream in(dir + "/index.txt");
     std::string line;
     while (std::getline(in, line)) {
@@ -153,7 +156,16 @@ void Library::set_dir(const std::string &dir) {
         std::istringstream fields(line);
         std::string kind, hex;
         AtracEntry e;
-        if (!(fields >> kind) || kind != "atrac") continue;
+        if (!(fields >> kind)) continue;
+        if (kind == "movie") {
+            MovieEntry mv;
+            if (fields >> mv.prefix >> hex >> mv.video >> mv.frames >> mv.audio && mv.prefix != 0u) {
+                mv.hash = std::stoull(hex, nullptr, 16);
+                fork_movies().add_entry(std::move(mv));
+            }
+            continue;
+        }
+        if (kind != "atrac") continue;
         if (!(fields >> e.prefix >> hex >> e.offset)) continue;
         std::getline(fields >> std::ws, e.file);
         while (!e.file.empty() && (e.file.back() == '\r' || e.file.back() == ' ')) e.file.pop_back();

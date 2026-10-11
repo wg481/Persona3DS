@@ -155,8 +155,21 @@ endif()
 if(P3P_HAVE_GAME)
 add_executable(p3p_pc_bootstrap
     platform/pc/main.cpp
+    platform/pc/fork_avcodec.cpp # Persona3DS fork: converted movies
     ${P3P_AOT_RUNNER_SOURCES}
 )
+# Persona3DS fork: optional libavcodec (the user's ffmpeg) to decode converted movies on PC.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(P3P_AVCODEC QUIET IMPORTED_TARGET libavcodec libavutil)
+endif()
+if(P3P_AVCODEC_FOUND)
+    target_link_libraries(p3p_pc_bootstrap PRIVATE PkgConfig::P3P_AVCODEC)
+    target_compile_definitions(p3p_pc_bootstrap PRIVATE P3P_HAVE_AVCODEC=1)
+    message(STATUS "Converted movies on PC: libavcodec ${P3P_AVCODEC_libavcodec_VERSION}")
+else()
+    message(STATUS "Converted movies on PC: libavcodec not found (pkg-config), movies stay black")
+endif()
 
 target_include_directories(p3p_pc_bootstrap PRIVATE
     core/include

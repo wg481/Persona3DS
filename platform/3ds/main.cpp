@@ -32,6 +32,8 @@
 #include "profile_info.hpp"
 #include "p3p3ds/fork_vfs.hpp"
 #include "p3p3ds/hle/fork_media.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
+#include "fork_mvd.hpp"
 #include "gpu_renderer.hpp"
 #include "p3p3ds/ge/async_renderer.hpp"
 #include "psprecomp/elf32.hpp"
@@ -619,6 +621,8 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "cores  : %s\n"
         "iso    : %s\n"
         "music  : %lu converted, %lu matched, %lu unmatched\n"
+        "movies : %lu converted, %lu matched, %lu unmatched, %lu pictures, %lu audio, %lu failed\n"
+        "         %s\n"
         "stop   : %s\n"
         "%s"
         "\nSTART+SELECT: quit\n",
@@ -632,6 +636,13 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().entries),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().matched),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().unmatched),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().entries),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().matched),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().unmatched),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().pictures),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().audio_units),
+        static_cast<unsigned long>(p3p3ds::hle::media::fork_movies().stats().decode_failures),
+        p3p3ds::hle::media::fork_movies().decoder_status().empty() ? "-" : p3p3ds::hle::media::fork_movies().decoder_status().c_str(),
         rt.stopped() ? rt.stop_reason().c_str() : "-", profile_text(s).c_str());
     return buf;
 }
@@ -773,7 +784,8 @@ int main() {
         // Read-only and unchanged while the game runs: lookups cached (vfs.hpp).
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
-        p3p3ds::hle::media::fork_media().set_dir(std::string(kBase) + "/media"); // Persona3DS: converted music
+        p3p3ds::n3ds::install_mvd_decoder(); // Persona3DS: converted movies on the hardware H.264 decoder
+        p3p3ds::hle::media::fork_media().set_dir(std::string(kBase) + "/media"); // Persona3DS: converted music and movies
         kernel.threads().init_root_thread("root", entry, sp, module->gp);
         std::set<std::uint32_t> stubs;
         std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>> imports;
@@ -865,7 +877,7 @@ int main() {
                     throw psprecomp::FrontierHalt{};
                 }
             }
-            if (stats.skip_movies) {
+            if (stats.skip_movies && !p3p3ds::hle::media::fork_movies().playing()) { // Persona3DS: converted movies play
                 std::uint64_t decoded = 0;
                 for (const auto &[handle, inst] : kernel.mpeg().instances) decoded += inst.video_decoded;
                 if (decoded != stats.movie_frames_seen && g_gpu->last_present_from_cpu()) {

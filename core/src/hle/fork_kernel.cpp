@@ -1,5 +1,7 @@
 // See fork_kernel.hpp.
 #include "p3p3ds/hle/fork_kernel.hpp"
+#include "p3p3ds/hle/fork_media.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
 #include "p3p3ds/hle/fork_atrac.hpp"
 
 #include "p3p3ds/hle/mpeg.hpp"
@@ -425,12 +427,14 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             inst->video_pipeline_primed = true;
             ++inst->video_decoded;
         }
+        if (pictures != 0u) hle::media::fork_movies().picture_decoded(inst->data);
         m.store32(au + hle::mpeg::AuSize, 0u);
         m.store32(init, pictures);
         ctx.set_gpr(2, 0u);
     });
 
-    // sceMpeg::0x31BD0272 - sceMpegAvcCsc: the range in 8888, black (placeholder decoder).
+    // sceMpeg::0x31BD0272 - sceMpegAvcCsc: the range in 8888 from the converted movie's current
+    // picture (fork_movie.hpp), black without one.
     runtime.register_hle("sceMpeg", 0x31BD0272u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         auto &m = rt.memory();
         const std::uint32_t mpeg = ctx.gpr[4], source = ctx.gpr[5], range = ctx.gpr[6], stride = ctx.gpr[7], dest = ctx.gpr[8];
@@ -443,11 +447,65 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         for (std::uint32_t row = 0; row < h; ++row)
             if (m.raw_pointer(row_address(row), w * 4u) == nullptr) return report();
         constexpr std::uint32_t kBlack = 0xFF000000u; // opaque, as BlankMpegDecoder
+        std::uint32_t pw = 0, ph = 0;
+        const std::uint32_t *picture = hle::media::fork_movies().current_picture(m.load32(mpeg), pw, ph);
         for (std::uint32_t row = 0; row < h; ++row) {
             std::uint8_t *p = m.raw_pointer(row_address(row), w * 4u);
-            for (std::uint32_t i = 0; i < w; ++i) std::memcpy(p + i * 4u, &kBlack, 4u);
+            const std::uint32_t py = y + row;
+            for (std::uint32_t i = 0; i < w; ++i) {
+                const std::uint32_t px = x + i;
+                const std::uint32_t c = picture != nullptr && px < pw && py < ph ? picture[py * pw + px] : kBlack;
+                std::memcpy(p + i * 4u, &c, 4u);
+            }
             m.notify_vram_write(row_address(row), w * 4u);
         }
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceMpeg::0x21FF80E4 - sceMpegQueryStreamOffset: as core/src/hle/mpeg.cpp, plus binding the
+    // instance to the converted movie whose PSMF header matches (fork_movie.hpp).
+    runtime.register_hle("sceMpeg", 0x21FF80E4u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const auto header = ctx.gpr[5], out = ctx.gpr[6];
+        if (!m.contains(header, 16u) || m.load32(header) != 0x464D5350u) { ctx.set_gpr(2, hle::mpeg::kErrorInvalidValue); return; } // "PSMF"
+        m.store32(out, __builtin_bswap32(m.load32(header + 8u)));
+        auto *inst = m.contains(ctx.gpr[4], 4u) ? kernel.mpeg().find(m.load32(ctx.gpr[4])) : nullptr;
+        if (inst != nullptr) {
+            inst->stream_size = __builtin_bswap32(m.load32(header + 12u));
+            auto &movies = hle::media::fork_movies();
+            std::string name;
+            if (movies.bind(m, inst->data, header, hle::media::fork_media().dir(), &name) != nullptr)
+                rt.event("movie_track", {{"handle", inst->data}}, name);
+            else if (movies.stats().entries != 0u)
+                rt.event("movie_unmatched", {{"handle", inst->data}, {"header", header}});
+        }
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceMpeg::0x606A4649 - sceMpegDelete: as core/src/hle/mpeg.cpp, plus ending the instance's converted movie.
+    runtime.register_hle("sceMpeg", 0x606A4649u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        if (auto *inst = m.contains(ctx.gpr[4], 4u) ? kernel.mpeg().find(m.load32(ctx.gpr[4])) : nullptr) {
+            rt.event("mpeg_delete", {{"handle", inst->data}, {"video_aus", inst->video_decoded}, {"audio_aus", inst->audio_decoded}});
+            hle::media::fork_movies().release(inst->data);
+            kernel.mpeg().instances.erase(inst->data);
+        }
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceMpeg::0x800C44DF - sceMpegAtracDecode: as core/src/hle/mpeg.cpp, with the converted
+    // movie's audio (2048 stereo samples per access unit) when there is one.
+    runtime.register_hle("sceMpeg", 0x800C44DFu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        auto *inst = m.contains(ctx.gpr[4], 4u) ? kernel.mpeg().find(m.load32(ctx.gpr[4])) : nullptr;
+        const auto au = ctx.gpr[5], buffer = ctx.gpr[6];
+        if (inst == nullptr || !m.contains(au, 24u) || m.load32(au + hle::mpeg::AuSize) == 0u) { ctx.set_gpr(2, hle::mpeg::kErrorAtracNoAu); return; }
+        std::uint8_t *out = m.raw_pointer(buffer, 2048u * 4u);
+        if (out == nullptr || (reinterpret_cast<std::uintptr_t>(out) & 1u) != 0u ||
+            !hle::media::fork_movies().next_audio(inst->data, reinterpret_cast<std::int16_t *>(out)))
+            kernel.mpeg().decoder->decode_audio(inst->last_audio, m, buffer);
+        ++inst->audio_decoded;
+        m.store32(au + hle::mpeg::AuSize, 0u);
         ctx.set_gpr(2, 0u);
     });
 

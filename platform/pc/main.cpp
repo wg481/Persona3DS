@@ -7,6 +7,8 @@
 #include "profile_info.hpp"
 #include "p3p3ds/fork_vfs.hpp"
 #include "p3p3ds/hle/fork_media.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
+namespace p3p3ds::pc { bool install_movie_decoder(); } // fork_avcodec.cpp
 #include "frame_dump.hpp"
 #include "pcm_mixer.hpp"
 #include "host_input.hpp"
@@ -142,6 +144,8 @@ int main(int argc,char **argv) {
             auto &media=p3p3ds::hle::media::fork_media();
             media.set_dir((elf_path.parent_path()/"media").string());
             if(media.stats().entries) std::cout<<"Media: "<<media.stats().entries<<" converted tracks in "<<media.dir()<<"\n";
+            if(const auto movies=p3p3ds::hle::media::fork_movies().stats().entries)
+                std::cout<<"Media: "<<movies<<" converted movies, "<<(p3p3ds::pc::install_movie_decoder()?"decoded with libavcodec":"no decoder (built without libavcodec): black pictures")<<"\n";
         }
         kernel.threads().init_root_thread("root",entry,sp,module->gp);
         {

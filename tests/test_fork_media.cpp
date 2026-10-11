@@ -4,6 +4,7 @@
 // sample.at3 and is skipped without the reference clone.
 #include "p3p3ds/hle/fork_atrac.hpp"
 #include "p3p3ds/hle/fork_media.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
 #include "psprecomp/guest_memory.hpp"
 #include "psprecomp/runtime.hpp"
 
@@ -159,6 +160,77 @@ void test_index_and_atrac() {
     check(atrac.decode_data(m, id2, out, &samples, &finish, &remain) == 0 && m.load16(out) == 0, "no index: silence");
 }
 
+// Fake decoder: every access unit is a picture whose pixels all equal the unit's last byte;
+// an access unit of one byte 0xEE produces no picture.
+class FakeDecoder final : public media::VideoDecoder {
+public:
+    bool decode(const std::uint8_t *au, std::size_t size, std::uint32_t *rgba, std::uint32_t width, std::uint32_t height) override {
+        if (size == 1 && au[0] == 0xEE) return false;
+        for (std::uint32_t k = 0; k < width * height; ++k) rgba[k] = au[size - 1];
+        return true;
+    }
+};
+
+void test_movies() {
+    // 5 access units of 3 bytes: "AU" + index.
+    std::vector<std::uint8_t> video;
+    std::vector<std::uint8_t> idx = {'P', '3', 'M', 'V'};
+    for (std::uint32_t v : {1u, 16u, 8u, 5u}) put32(idx, v);
+    for (std::uint32_t k = 0; k < 5; ++k) {
+        put32(idx, static_cast<std::uint32_t>(video.size()));
+        put32(idx, 3);
+        video.insert(video.end(), {'A', 'U', static_cast<std::uint8_t>(10 + k)});
+    }
+    write(kTmp / "mv.h264", video);
+    write(kTmp / "mv.idx", idx);
+    write(kTmp / "mv.wav", ima_wav(2, 300, 300 * 17));
+    std::vector<std::uint8_t> psmf(0x800, 0);
+    psmf[0] = 'P'; psmf[1] = 'S'; psmf[2] = 'M'; psmf[3] = 'F'; psmf[100] = 7;
+    {
+        std::ofstream index(kTmp / "index.txt");
+        index << "movie 2048 " << std::hex << media::fnv1a64(psmf.data(), psmf.size()) << std::dec << " mv.h264 mv.idx mv.wav\n";
+        index << "movie 2048 0 missing.h264 missing.idx -\n";
+    }
+    media::set_video_decoder_factory([](std::uint32_t, std::uint32_t) { return std::make_unique<FakeDecoder>(); });
+    auto &lib = media::fork_media();
+    lib.set_dir(kTmp.string());
+    auto &movies = media::fork_movies();
+    check(movies.stats().entries == 2, "index: two movie entries");
+    psprecomp::Runtime rt;
+    auto &m = rt.memory();
+    const std::uint32_t header = 0x08A00000u, handle = 0x09000000u;
+    for (std::size_t k = 0; k < psmf.size(); ++k) m.store8(header + static_cast<std::uint32_t>(k), psmf[k]);
+    std::string name;
+    check(movies.bind(m, handle, header, lib.dir(), &name) != nullptr && name == "mv.h264", "PSMF header selects the movie");
+    std::uint32_t w = 0, h = 0;
+    check(movies.current_picture(handle, w, h) == nullptr, "no picture before the first decoded one");
+    movies.picture_decoded(handle);
+    const std::uint32_t *p = movies.current_picture(handle, w, h);
+    check(p != nullptr && w == 16 && h == 8 && p[0] == 10u, "first picture is access unit 0");
+    movies.picture_decoded(handle);
+    movies.picture_decoded(handle);
+    p = movies.current_picture(handle, w, h);
+    check(p != nullptr && p[5] == 12u, "third picture is access unit 2 (unit 1 decoded on the way)");
+    check(movies.current_picture(handle, w, h)[0] == 12u, "same picture again without decoding");
+    for (int k = 0; k < 5; ++k) movies.picture_decoded(handle);
+    p = movies.current_picture(handle, w, h);
+    check(p != nullptr && p[0] == 14u, "past the last unit: the last picture stays");
+    std::vector<std::int16_t> pcm(4096);
+    check(movies.next_audio(handle, pcm.data()) && pcm[0] == 1000 && pcm[17 * 2] == 2000, "audio unit 0: samples 0..2047");
+    check(movies.next_audio(handle, pcm.data()) && pcm[0] == static_cast<std::int16_t>(1000 * (2048 / 17 + 1)), "audio unit 1 starts at sample 2048");
+    check(movies.stats().audio_units == 2, "audio units counted");
+    movies.release(handle);
+    check(!movies.playing() && movies.current_picture(handle, w, h) == nullptr, "release ends the movie");
+    m.store8(header + 100, 8);
+    check(movies.bind(m, handle, header, lib.dir()) == nullptr && movies.stats().unmatched == 1, "other header: unmatched");
+    media::set_video_decoder_factory(nullptr);
+    m.store8(header + 100, 7);
+    check(movies.bind(m, handle, header, lib.dir()) != nullptr, "bind without a decoder");
+    movies.picture_decoded(handle);
+    check(movies.current_picture(handle, w, h) == nullptr, "no decoder: no picture (black)");
+    check(movies.next_audio(handle, pcm.data()), "no decoder: the audio still plays");
+}
+
 } // namespace
 
 int main() {
@@ -166,6 +238,7 @@ int main() {
     test_fnv();
     test_ima();
     test_index_and_atrac();
+    test_movies();
     std::cout << "fork media failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

@@ -85,6 +85,69 @@ class ConvertMediaTests(unittest.TestCase):
             self.assertEqual(entries[3][4], "sdata_bgm03.wav")
 
 
+def psmf_with_audio(frames: list[bytes], b2: int = 0x28, b3: int = 0x2E) -> bytes:
+    """PSMF header (stream at 0x800) + packs whose private stream 1 carries the ATRAC3plus units."""
+    es = b"".join(bytes([0x0F, 0xD0, b2, b3]) + bytes(4) + f for f in frames)
+    packs = []
+    for i in range(0, len(es), 1900):
+        payload = b"\x00\x00\x00\x00" + es[i:i + 1900]
+        pes = b"\x00\x00\x01\xbd" + struct.pack(">H", 3 + len(payload)) + b"\x81\x00\x00" + payload
+        pack = b"\x00\x00\x01\xba" + bytes(9) + b"\xf8" + pes
+        packs.append(pack + bytes(2048 - len(pack)))
+    header = bytearray(0x800)
+    header[0:4] = b"PSMF"
+    struct.pack_into(">I", header, 8, 0x800)
+    return bytes(header) + b"".join(packs)
+
+
+class MovieTests(unittest.TestCase):
+    def test_access_units(self):
+        aud = b"\x00\x00\x00\x01\x09\xf0"
+        stream = aud + b"\x00\x00\x00\x01\x67AB" + b"\x00\x00\x01\x65CD" + aud + b"\x00\x00\x01\x41EF"
+        aus = cm.h264_access_units(stream)
+        self.assertEqual(aus, [(0, 19), (19, len(stream) - 19)])  # 6 + 7 + 6 bytes, then 6 + 6
+        self.assertEqual(cm.h264_access_units(b"\x00\x00\x01\x65CD"), [])
+
+    def test_psmf_audio_oma(self):
+        frames = [bytes([k]) * 376 for k in range(5)]  # (0x2E + 1) * 8 = 376 bytes per frame
+        oma = cm.psmf_audio_oma(psmf_with_audio(frames))
+        self.assertEqual(oma[:3], b"EA3")
+        self.assertEqual((oma[5], oma[32], oma[33:36]), (96, 1, b"\x00\x28\x2e"))
+        self.assertEqual(oma[96:], b"".join(frames))
+        self.assertIsNone(cm.psmf_audio_oma(psmf_with_audio([])))
+        self.assertIsNone(cm.psmf_audio_oma(b"RIFF" + bytes(100)))
+
+    def test_convert_movies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "USRDIR", Path(tmp) / "media"
+            (src / "MOVIE").mkdir(parents=True)
+            (src / "MOVIE" / "MV00.pmf").write_bytes(psmf_with_audio([bytes(376)] * 3))
+            (src / "MOVIE" / "MV01.pmf").write_bytes(psmf_with_audio([]))
+            (src / "MOVIE" / "bad.pmf").write_bytes(b"nope")
+            aud = b"\x00\x00\x00\x01\x09\xf0"
+
+            def video(s, d):
+                d.write_bytes((aud + b"\x00\x00\x01\x65XX") * 3)
+
+            def audio(s, d):
+                if cm.psmf_audio_oma(s.read_bytes()) is None:
+                    raise ValueError("no ATRAC3plus stream")
+                d.write_bytes(ima_wav(3 * 2048))
+
+            logs = []
+            lines = cm.convert_movies(src, out, video, audio, lambda p: (480, 272), log=logs.append)
+            self.assertEqual(len(lines), 2)
+            first = lines[0].split("#")[0].split()
+            head = (src / "MOVIE" / "MV00.pmf").read_bytes()[:0x800]
+            self.assertEqual(first, ["movie", "2048", f"{cm.fnv1a64(head):016x}", "MOVIE_MV00.h264", "MOVIE_MV00.idx", "MOVIE_MV00.wav"])
+            self.assertEqual(lines[1].split()[5], "-")  # no audio stream
+            self.assertTrue(any("bad.pmf" in l for l in logs))
+            idx = (out / "MOVIE_MV00.idx").read_bytes()
+            self.assertEqual(idx[:4], b"P3MV")
+            self.assertEqual(struct.unpack_from("<IIII", idx, 4), (1, 480, 272, 3))
+            self.assertEqual(struct.unpack_from("<II", idx, 20 + 8), (len(aud) + 6, len(aud) + 6))  # AUD + 3-byte start code + 3 bytes
+
+
 class FinishWavTests(unittest.TestCase):
     def run_finish(self, wav: bytes, raw: int):
         with tempfile.TemporaryDirectory() as tmp:
