@@ -8,6 +8,7 @@
 
 namespace psprecomp {
 class Runtime;
+struct AllegrexContext;
 }
 
 namespace p3p3ds {
@@ -133,12 +134,52 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata,
                                           std::uint32_t inlen, std::uint32_t outdata, std::uint32_t outlen);
 
-// InterruptManager::0xCA04A2B9
-// int sceKernelRegisterSubIntrHandler(int intno, int no, void *handler, void *arg);
-// (uOFW src/kd/interruptman exports). Reached on the New 3DS (first run,
-// 591 frames) but not yet on the PC. Running a guest handler on every
-// interrupt is a scheduler feature; until Persona's arguments are observed
-// the call stops the run and names them.
+// InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
+// 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
+// sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).
+// Persona (PC run 12, New 3DS run 2): intno 30 (vblank), no 0, handler
+// 0x0881203C, arg 0x090DF380. Only intno 30 is modelled; intno < 0 or >= 68
+// returns 0x80020065 (uOFW, registersub.expected), another valid intno stops
+// the run and names the call.
+// Results [VERIFIED] pspautotests intr/registersub, releasesub, enablesub
+// (hardware), intno 30:
+//  register: no 0..15 -> 0 (a NULL handler registers but leaves the slot
+//    free); occupied by a non-NULL handler -> 0x80020067; no 18-20, 24-26
+//    -> 0x80020067 (system handlers); any other no -> 0x80020065.
+//  release: no 0..15 with a non-NULL handler -> 0 (and disables it); 0..15
+//    without one, 16..31 -> 0x80020068; any other no -> 0x80020065.
+//  enable: no 0..15 -> 0 even without a handler (a handler registered later
+//    runs); invalid no -> 0x80020065. [INFERRED] 16..31 -> 0x80020065 (uOFW:
+//    user mode may not touch system sub-interrupts).
+//  An enabled sub-interrupt with a handler runs handler(no, arg) once per
+//  vblank ("* handler(00000001, deadbeef)" after a 17 ms delay); a released
+//  handler does not run again until re-enabled.
+class VblankSubInterrupts {
+public:
+    static constexpr std::uint32_t kInvalid = 0x80020065u, kExists = 0x80020067u, kNotFound = 0x80020068u;
+    static constexpr int kUserSlots = 16;
+    struct Slot { std::uint32_t handler{}, arg{}, gp{}; bool enabled{}; };
+    std::uint32_t register_handler(std::int32_t no, std::uint32_t handler, std::uint32_t arg, std::uint32_t gp) noexcept;
+    std::uint32_t release(std::int32_t no) noexcept;
+    std::uint32_t enable(std::int32_t no) noexcept;
+    [[nodiscard]] const Slot &slot(int no) const noexcept { return slots_[no]; }
+    [[nodiscard]] bool any_runnable() const noexcept;
+    std::uint64_t last_vblank{};   // vblank count whose handlers have run
+    bool in_handler{};             // a handler is running (no nesting)
+
+private:
+    Slot slots_[kUserSlots]{};
+};
+
+// Runs the enabled vblank handlers if a vblank passed since they last ran:
+// from a dispatch boundary (runtime starvation hook), as a guest call on the
+// current thread that resumes at ctx.pc. Missed vblanks (all threads
+// waiting, no dispatches) collapse into one call [INFERRED]; the handler may
+// be preempted by threads its HLE calls wake [INFERRED: on the PSP it would
+// finish first]. Returns true if a handler was started.
+bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx);
+[[nodiscard]] VblankSubInterrupts &fork_vblank_subinterrupts() noexcept;
+
 [[nodiscard]] std::string describe_subintr(std::uint32_t intno, std::uint32_t no, std::uint32_t handler, std::uint32_t arg);
 
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);

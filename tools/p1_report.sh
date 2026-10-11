@@ -4,13 +4,15 @@
 # Pulls p1-retarget, builds, runs CTest and the PC runner (frames every 60
 # vblanks), summarizes the events, disassembles the code before the last
 # transfer and converts frames 120 and 300 and the last frame to PNG. An input
-# script (core/include/p3p3ds/input.hpp format) is passed as --input. Everything textual goes to
+# script (core/include/p3p3ds/input.hpp format, default
+# profiles/p1p/input/boot_presses.txt, "none" for no input) is passed as --input. Everything textual goes to
 # .tmp/p1/report<N>.txt; the PNGs stay in .tmp/p1/frames<N>/.
 set -u
 N=${1:?run number}
 DISPATCHES=${2:-5000000}
 ISO=${3:-$(ls *.iso 2>/dev/null | head -1)}
-INPUT=${4:-}
+INPUT=${4:-profiles/p1p/input/boot_presses.txt}   # "none" for no input
+[ "$INPUT" = "none" ] && INPUT=""
 INPUT_ARGS=()
 [ -n "$INPUT" ] && INPUT_ARGS=(--input "$INPUT")
 OUT=.tmp/p1

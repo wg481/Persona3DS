@@ -196,15 +196,110 @@ void test_devctl_reports_call() {
     CHECK(rt.stop_reason() == "sceIoDevctl(\"mscmhc0:\", 0x02025806, in 0x00000000/0, out 0x08B00100/4) is not modelled yet");
 }
 
-// InterruptManager::0xCA04A2B9: not modelled; the stop names the call (first 3DS run).
-void test_subintr_reports_call() {
+// InterruptManager sub-interrupts, intno 30 (vblank): results from
+// pspautotests intr/registersub, releasesub, enablesub (hardware).
+struct Intr {
     psprecomp::Runtime rt;
     p3p3ds::KernelState kernel;
-    p3p3ds::hle::register_all_hle_modules(rt, kernel);
-    rt.cpu().set_gpr(4, 30u); rt.cpu().set_gpr(5, 2u); rt.cpu().set_gpr(6, 0x08812340u); rt.cpu().set_gpr(7, 0u);
-    rt.invoke_import("InterruptManager", 0xCA04A2B9u, rt.cpu());
-    CHECK(rt.stopped());
-    CHECK(rt.stop_reason() == "sceKernelRegisterSubIntrHandler(intno 30, no 2, handler 0x08812340, arg 0x00000000) is not modelled yet");
+    Intr() {
+        p3p3ds::hle::register_all_hle_modules(rt, kernel);
+        kernel.threads().init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0x08AFD790u);
+    }
+    std::uint32_t call(std::uint32_t nid, std::uint32_t intno, std::uint32_t no, std::uint32_t handler = 0u, std::uint32_t arg = 0u) {
+        rt.cpu().set_gpr(4, intno); rt.cpu().set_gpr(5, no); rt.cpu().set_gpr(6, handler); rt.cpu().set_gpr(7, arg);
+        rt.invoke_import("InterruptManager", nid, rt.cpu());
+        return rt.cpu().gpr[2];
+    }
+    std::uint32_t reg(std::int32_t no, std::uint32_t h, std::uint32_t arg = 0xDEADBEEFu) { return call(0xCA04A2B9u, 30u, static_cast<std::uint32_t>(no), h, arg); }
+    std::uint32_t rel(std::int32_t no) { return call(0xD61E6961u, 30u, static_cast<std::uint32_t>(no)); }
+    std::uint32_t en(std::int32_t no) { return call(0xFB8E22ECu, 30u, static_cast<std::uint32_t>(no)); }
+    void advance_vblank() { for (int i = 0; i < 16700; ++i) kernel.threads().on_syscall_return(rt, rt.cpu()); }
+};
+
+void test_subintr_results() {
+    constexpr std::uint32_t kH = 0x0881203Cu;
+    { // registersub.expected "sub interrupts" (register, then release)
+        Intr t;
+        for (std::int32_t no = -2; no < 70; ++no) {
+            const auto r = t.reg(no, kH);
+            (void)t.rel(no);
+            const bool sys = (no >= 18 && no <= 20) || (no >= 24 && no <= 26);
+            CHECK(r == (no >= 0 && no <= 15 ? 0u : sys ? 0x80020067u : 0x80020065u));
+        }
+        CHECK(t.reg(1, 0u) == 0u);              // NULL handler
+        CHECK(t.reg(1, 0u) == 0u);              // Twice NULL
+        CHECK(t.reg(1, kH) == 0u);              // Twice not NULL
+        CHECK(t.reg(1, kH) == 0x80020067u);     // Again not NULL
+        CHECK(t.reg(1, 0u) == 0x80020067u);     // NULL afterward
+    }
+    { // releasesub.expected
+        Intr t;
+        for (std::int32_t no = -2; no < 70; ++no) {
+            (void)t.reg(no, kH);
+            const auto r = t.rel(no);
+            CHECK(r == (no >= 0 && no <= 15 ? 0u : no >= 16 && no <= 31 ? 0x80020068u : 0x80020065u));
+        }
+        (void)t.reg(1, 0u);
+        CHECK(t.rel(1) == 0x80020068u);         // NULL handler
+        CHECK(t.rel(1) == 0x80020068u);         // Twice NULL
+        (void)t.reg(1, kH);
+        CHECK(t.rel(1) == 0u);                  // Not NULL
+        CHECK(t.rel(1) == 0x80020068u);         // Twice not NULL
+    }
+    { // enablesub.expected
+        Intr t;
+        (void)t.reg(1, kH);
+        CHECK(t.call(0xFB8E22ECu, 70u, 1u) == 0x80020065u);           // Invalid intr
+        CHECK(t.call(0xCA04A2B9u, 0xFFFFFFFEu, 0u, 0x0881203Cu) == 0x80020065u); // Interrupt -2
+        CHECK(!t.rt.stopped());
+        (void)t.call(0xCA04A2B9u, 25u, 0u, 0x0881203Cu);              // valid, not modelled: reported
+        CHECK(t.rt.stopped() && t.rt.stop_reason().find("intno 25") != std::string::npos);
+    }
+    {
+        Intr t;
+        (void)t.reg(1, kH);
+        CHECK(t.en(70) == 0x80020065u);         // Invalid subintr
+        CHECK(t.en(1) == 0u);                   // Registered
+        CHECK(t.en(1) == 0u);                   // Twice
+        CHECK(t.en(3) == 0u);                   // Unregistered
+        CHECK(!t.rt.stopped());
+    }
+}
+
+void test_subintr_dispatch() {
+    using TM = p3p3ds::hle::ThreadManager;
+    Intr t;
+    auto &ctx = t.rt.cpu();
+    // Persona's call (PC run 12): intno 30, no 0, handler 0x0881203C, arg 0x090DF380.
+    ctx.set_gpr(28, 0x08AFD790u);
+    CHECK(t.reg(0, 0x0881203Cu, 0x090DF380u) == 0u);
+    CHECK(t.en(0) == 0u);
+    CHECK(t.en(3) == 0u);                        // enabled before its handler exists
+    CHECK(t.reg(3, 0x08900000u, 0x1234u) == 0u); // ... runs once registered
+    CHECK(t.en(5) == 0u);                        // enabled without a handler: never runs
+    ctx.pc = 0x08810000u;
+    ctx.set_gpr(29, 0x09FFF000u);
+    CHECK(!p3p3ds::hle::dispatch_vblank_subinterrupts(t.rt, ctx)); // no vblank yet
+    t.advance_vblank();
+    ctx.pc = 0x08810000u;
+    const auto generation = psprecomp::runtime_thread_switch_generation();
+    CHECK(p3p3ds::hle::dispatch_vblank_subinterrupts(t.rt, ctx));
+    CHECK(psprecomp::runtime_thread_switch_generation() != generation); // native callers unwind
+    CHECK(ctx.pc == 0x0881203Cu && ctx.gpr[4] == 0u && ctx.gpr[5] == 0x090DF380u);
+    CHECK(ctx.gpr[28] == 0x08AFD790u && ctx.gpr[31] == TM::kGuestCallReturnSentinel);
+    CHECK(!p3p3ds::hle::dispatch_vblank_subinterrupts(t.rt, ctx)); // no nesting
+    t.kernel.threads().guest_call_returned(t.rt, ctx);               // handler 0 returns
+    CHECK(ctx.pc == 0x08900000u && ctx.gpr[4] == 3u && ctx.gpr[5] == 0x1234u);
+    t.kernel.threads().guest_call_returned(t.rt, ctx);               // handler 3 returns
+    CHECK(ctx.pc == 0x08810000u && ctx.gpr[29] == 0x09FFF000u);      // interrupted code resumes
+    CHECK(!p3p3ds::hle::fork_vblank_subinterrupts().in_handler);
+    CHECK(!p3p3ds::hle::dispatch_vblank_subinterrupts(t.rt, ctx));  // once per vblank
+    // Released while enabled: does not run again (enablesub "Released while enabled").
+    CHECK(t.rel(0) == 0u && t.rel(3) == 0u);
+    CHECK(t.reg(0, 0x0881203Cu, 0x090DF380u) == 0u);
+    t.advance_vblank();
+    CHECK(!p3p3ds::hle::dispatch_vblank_subinterrupts(t.rt, ctx));
+    CHECK(!t.rt.stopped());
 }
 
 // fatms0: 0x02425823 as Persona calls it (run 10): out = a stack word, outlen 4.
@@ -292,7 +387,8 @@ int main() {
     test_devctl_reports_call();
     test_devctl_ms_free_space();
     test_devctl_fat_ready();
-    test_subintr_reports_call();
+    test_subintr_results();
+    test_subintr_dispatch();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

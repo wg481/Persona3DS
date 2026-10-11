@@ -102,10 +102,106 @@ std::string describe_subintr(std::uint32_t intno, std::uint32_t no, std::uint32_
            psprecomp::hex32(handler) + ", arg " + psprecomp::hex32(arg) + ") is not modelled yet";
 }
 
+namespace {
+VblankSubInterrupts g_vblank_subintr;
+KernelState *g_fork_kernel = nullptr;
+constexpr std::uint64_t kInterruptCheckDispatches = 32u; // dispatch boundaries between vblank checks
+constexpr std::uint32_t kVblankInterrupt = 30u;
+
+bool system_subintr(std::int32_t no) noexcept { return (no >= 18 && no <= 20) || (no >= 24 && no <= 26); }
+
+void start_handlers(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, int from);
+
+void interrupt_boundary(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) { (void)dispatch_vblank_subinterrupts(rt, ctx); }
+
+// Runs the next enabled handler at or after `from`; each one chains the next
+// from its continuation, the last clears in_handler.
+void start_handlers(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, int from) {
+    auto &s = g_vblank_subintr;
+    for (int no = from; no < VblankSubInterrupts::kUserSlots; ++no) {
+        const auto &slot = s.slot(no);
+        if (!slot.enabled || slot.handler == 0u) continue;
+        const psprecomp::AllegrexContext resume = ctx;
+        g_fork_kernel->threads().call_guest(rt, ctx, resume, slot.handler,
+            {static_cast<std::uint32_t>(no), slot.arg}, slot.gp,
+            [no](psprecomp::Runtime &r, psprecomp::AllegrexContext &c, std::uint32_t) { start_handlers(r, c, no + 1); });
+        // Native callers still on the host stack must unwind: resume from ctx.pc.
+        ++psprecomp::g_runtime_thread_switch_generation_fast;
+        return;
+    }
+    s.in_handler = false;
+}
+} // namespace
+
+std::uint32_t VblankSubInterrupts::register_handler(std::int32_t no, std::uint32_t handler, std::uint32_t arg, std::uint32_t gp) noexcept {
+    if (no < 0 || no >= 32) return kInvalid;
+    if (no >= kUserSlots) return system_subintr(no) ? kExists : kInvalid;
+    auto &slot = slots_[no];
+    if (slot.handler != 0u) return kExists;
+    slot.handler = handler;
+    slot.arg = arg;
+    slot.gp = gp;
+    return 0u;
+}
+
+std::uint32_t VblankSubInterrupts::release(std::int32_t no) noexcept {
+    if (no < 0 || no >= 32) return kInvalid;
+    if (no >= kUserSlots || slots_[no].handler == 0u) return kNotFound;
+    slots_[no] = Slot{};
+    return 0u;
+}
+
+std::uint32_t VblankSubInterrupts::enable(std::int32_t no) noexcept {
+    if (no < 0 || no >= kUserSlots) return kInvalid;
+    slots_[no].enabled = true;
+    return 0u;
+}
+
+bool VblankSubInterrupts::any_runnable() const noexcept {
+    for (const auto &slot : slots_)
+        if (slot.enabled && slot.handler != 0u) return true;
+    return false;
+}
+
+VblankSubInterrupts &fork_vblank_subinterrupts() noexcept { return g_vblank_subintr; }
+
+bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+    auto &s = g_vblank_subintr;
+    if (g_fork_kernel == nullptr || s.in_handler || !s.any_runnable()) return false;
+    auto &threads = g_fork_kernel->threads();
+    const auto vblank = threads.vblank_count();
+    if (vblank <= s.last_vblank || threads.current_thread() == nullptr) return false;
+    s.last_vblank = vblank;
+    s.in_handler = true;
+    rt.event("vblank_subintr", {{"vblank", static_cast<std::uint32_t>(vblank)}});
+    start_handlers(rt, ctx, 0);
+    return true;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
-    // InterruptManager::0xCA04A2B9 - sceKernelRegisterSubIntrHandler: report the observed call.
-    runtime.register_hle("InterruptManager", 0xCA04A2B9u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
-        rt.stop(describe_subintr(ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]));
+    g_fork_kernel = &kernel;
+    g_vblank_subintr = VblankSubInterrupts{};
+    psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
+    const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
+        runtime.register_hle("InterruptManager", nid, [fn](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+            const auto intno = static_cast<std::int32_t>(ctx.gpr[4]);
+            // uOFW: intrNum >= 68 is invalid; registersub.expected: -2, -1, 68, 69 -> 0x80020065.
+            if (intno < 0 || intno >= 68) { ctx.set_gpr(2, VblankSubInterrupts::kInvalid); return; }
+            if (ctx.gpr[4] != kVblankInterrupt) { rt.stop(describe_subintr(ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7])); return; }
+            ctx.set_gpr(2, fn(ctx, static_cast<std::int32_t>(ctx.gpr[5])));
+        });
+    };
+    // InterruptManager::0xCA04A2B9 - sceKernelRegisterSubIntrHandler
+    subintr(0xCA04A2B9u, [](psprecomp::AllegrexContext &ctx, std::int32_t no) {
+        return g_vblank_subintr.register_handler(no, ctx.gpr[6], ctx.gpr[7], ctx.gpr[28]);
+    });
+    // InterruptManager::0xD61E6961 - sceKernelReleaseSubIntrHandler
+    subintr(0xD61E6961u, [](psprecomp::AllegrexContext &, std::int32_t no) { return g_vblank_subintr.release(no); });
+    // InterruptManager::0xFB8E22EC - sceKernelEnableSubIntr
+    subintr(0xFB8E22ECu, [](psprecomp::AllegrexContext &, std::int32_t no) {
+        if (g_fork_kernel != nullptr && !g_vblank_subintr.any_runnable())
+            g_vblank_subintr.last_vblank = g_fork_kernel->threads().vblank_count(); // first call at the next vblank
+        return g_vblank_subintr.enable(no);
     });
 
     // IoFileMgrForUser::0x54F5FB11 - sceIoDevctl: modelled commands, else report the call.
