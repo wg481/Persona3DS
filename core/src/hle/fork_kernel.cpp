@@ -706,6 +706,14 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         ctx.set_gpr(2, kernel.sysmem().total_free_memory());
     });
 
+    // ThreadManForUser::0x809CE29B - sceKernelExitDeleteThread(status)
+    runtime.register_hle("ThreadManForUser", 0x809CE29Bu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &tm = kernel.threads();
+        const auto uid = tm.current_thread_id();
+        if (!tm.exit_current_thread(static_cast<std::int32_t>(ctx.gpr[4]), ctx, rt)) return;
+        (void)tm.delete_thread(uid);
+    });
+
     // sceRtc::0x6FF40ACC - sceRtcGetTick
     runtime.register_hle("sceRtc", 0x6FF40ACCu, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const std::uint32_t date = ctx.gpr[4], tick = ctx.gpr[5]; // $a0, $a1

@@ -369,6 +369,15 @@ inline constexpr std::uint32_t kMsgDialogOptionYesNo = 0x10u, kMsgDialogOptionDe
     return (options & kMsgDialogOptionYesNo) != 0u && (options & kMsgDialogOptionDefaultNo) != 0u ? 2u : 1u;
 }
 
+// ThreadManForUser 0x809CE29B sceKernelExitDeleteThread(status). Persona
+// (PC run 21, New 3DS run 11) calls it from 0x0881128C to end its BGM thread
+// (status 1). Upstream's ThreadManager::exit_current_thread (threads waiting
+// for the end wake with the exit status, the next thread is dispatched),
+// then delete_thread on the exited thread: [VERIFIED] pspautotests
+// threads/threads/threadend.expected "Exit deleted": a later wait on it gives
+// 0x80020198 (unknown thread). Waiters at the time of the exit get the exit
+// status [INFERRED: PPSSPP __KernelDeleteThread; no hardware case].
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

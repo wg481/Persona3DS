@@ -880,6 +880,31 @@ void test_poll_event_flag_nid() {
     rt.invoke_import("SysMemUserForUser", 0xF919F628u, rt.cpu());
     CHECK(rt.cpu().gpr[2] == kernel.sysmem().total_free_memory() && !rt.stopped());
 }
+
+// sceKernelExitDeleteThread: the thread ends (a waiter gets the status), is
+// deleted (threadend.expected "Exit deleted": later waits give 0x80020198).
+void test_exit_delete_thread() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &tm = kernel.threads();
+    auto &m = rt.memory();
+    const auto root = tm.init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    const auto bgm = tm.create_thread("thread BGM", 0x08810E20u, 16, 0x10000u, 0u, 0u, m);
+    CHECK(tm.start_thread(bgm, 0u, 0u, m, rt.cpu()) == 0);   // higher priority: runs now
+    CHECK(tm.current_thread_id() == bgm);
+    tm.get_thread(root)->status = p3p3ds::hle::InternalThreadState::Waiting; // root waits for its end
+    tm.get_thread(root)->wait = p3p3ds::hle::WaitInfo{p3p3ds::hle::WaitType::ThreadEnd, bgm};
+    rt.cpu().set_gpr(4, 1u);
+    rt.invoke_import("ThreadManForUser", 0x809CE29Bu, rt.cpu());
+    CHECK(!rt.stopped());
+    CHECK(tm.get_thread(bgm) == nullptr);                      // deleted
+    CHECK(tm.current_thread_id() == root);
+    CHECK(tm.get_thread(root)->context.gpr[2] == 1u || rt.cpu().gpr[2] == 1u); // woke with the exit status
+    rt.cpu().set_gpr(4, static_cast<std::uint32_t>(bgm)); rt.cpu().set_gpr(5, 0u);
+    rt.invoke_import("ThreadManForUser", 0x278C0DF5u, rt.cpu()); // sceKernelWaitThreadEnd
+    CHECK(rt.cpu().gpr[2] == 0x80020198u);                     // "Exit deleted: 80020198"
+}
 } // namespace
 
 int main() {
@@ -934,6 +959,7 @@ int main() {
     test_io_rename();
     test_msgdialog();
     test_poll_event_flag_nid();
+    test_exit_delete_thread();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
