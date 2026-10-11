@@ -147,6 +147,11 @@ std::uint32_t umd_deactivate_result(std::uint32_t mode, const std::string &drive
     return (mode == 1u || mode == 2u) && drive == "disc0:" ? 0u : 0x80010016u;
 }
 
+std::string describe_decode_stop_ycbcr(std::uint32_t mpeg, std::uint32_t buffer, std::uint32_t status) {
+    return "sceMpegAvcDecodeStopYCbCr(mpeg " + psprecomp::hex32(mpeg) + ", buffer " + psprecomp::hex32(buffer) + ", status " +
+           psprecomp::hex32(status) + ") is not modelled yet";
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -409,6 +414,23 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         const std::uint32_t result = registered ? static_cast<std::uint32_t>(uid) : 0x80010016u;
         ctx.set_gpr(2, result);
         rt.event("umd_callback_unregister", {{"uid", ctx.gpr[4]}, {"result", result}});
+    });
+
+    // sceMpeg::0xF2930C9C - sceMpegAvcDecodeStopYCbCr: no pending picture, as sceMpegAvcDecodeStop.
+    runtime.register_hle("sceMpeg", 0xF2930C9Cu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t mpeg = ctx.gpr[4], buffer = ctx.gpr[5], status = ctx.gpr[6];
+        if (!m.contains(mpeg, 4u) || kernel.mpeg().find(m.load32(mpeg)) == nullptr || !m.contains(status, 4u)) {
+            rt.stop(describe_decode_stop_ycbcr(mpeg, buffer, status));
+            return;
+        }
+        m.store32(status, 0u);
+        ctx.set_gpr(2, 0u);
+    });
+
+    // sceDisplay::0x4D4E10EC - sceDisplayIsVblank
+    runtime.register_hle("sceDisplay", 0x4D4E10ECu, [&kernel](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+        ctx.set_gpr(2, display_is_vblank(kernel.threads().now(), hle::ThreadManager::kVblankPeriodUs));
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

@@ -254,6 +254,25 @@ struct MemoryStickInfo {
 // afterwards is not seen here [INFERRED: neither is observed].
 [[nodiscard]] std::int32_t fork_umd_callback(const KernelState &kernel) noexcept; // 0 = none
 
+// sceMpeg 0xF2930C9C sceMpegAvcDecodeStopYCbCr(mpeg, buffer, status).
+// Imported by Persona; added ahead of the game reaching it. As upstream's
+// sceMpegAvcDecodeStop and PPSSPP (read, not copied): *status = 0 (no
+// pending picture), return 0 [INFERRED]; JPCSP instead flushes one pending
+// picture into *buffer, which the placeholder decoder does not have. An
+// unknown handle or a status outside guest memory stops and names the call.
+[[nodiscard]] std::string describe_decode_stop_ycbcr(std::uint32_t mpeg, std::uint32_t buffer, std::uint32_t status);
+
+// sceDisplay 0x4D4E10EC sceDisplayIsVblank(). Imported by Persona; added
+// ahead of the game reaching it. [VERIFIED] pspautotests display/isstate and
+// vblanklen (hardware): 1 from vblank start for about 731.5 us (measured
+// 730-740 us), then 0 until the next start; the frame is 16,680-16,690 us.
+// Upstream's virtual clock starts each vblank at a multiple of
+// ThreadManager::kVblankPeriodUs, so: (now % period) < kVblankLengthUs.
+inline constexpr std::uint64_t kVblankLengthUs = 732u;
+[[nodiscard]] constexpr std::uint32_t display_is_vblank(std::uint64_t now_us, std::uint64_t period_us) noexcept {
+    return now_us % period_us < kVblankLengthUs ? 1u : 0u;
+}
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

@@ -604,6 +604,42 @@ void test_umd_unregister_callback() {
     CHECK(kernel.threads().get_callback(cb)->notify_count == 0);
     CHECK(!rt.stopped());
 }
+
+// sceMpegAvcDecodeStopYCbCr on a created instance: *status = 0, result 0.
+void test_mpeg_decode_stop_ycbcr() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kMpeg = 0x08CC268Cu, kData = 0x08A00000u, kRb = 0x08CC26ECu, kStatus = 0x09FEF800u;
+    rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, kData); rt.cpu().set_gpr(6, 0x10000u); rt.cpu().set_gpr(7, kRb);
+    rt.invoke_import("sceMpeg", 0xD8C5F121u, rt.cpu()); // sceMpegCreate
+    m.store32(kStatus, 0xDEADBEEFu);
+    rt.cpu().set_gpr(4, kMpeg); rt.cpu().set_gpr(5, 0x08CC25ECu); rt.cpu().set_gpr(6, kStatus);
+    rt.invoke_import("sceMpeg", 0xF2930C9Cu, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == 0u && m.load32(kStatus) == 0u && !rt.stopped());
+    rt.cpu().set_gpr(4, 0x08B00000u); // no handle stored there: reported
+    rt.invoke_import("sceMpeg", 0xF2930C9Cu, rt.cpu());
+    CHECK(rt.stopped());
+}
+
+// sceDisplayIsVblank: isstate.expected / vblanklen.expected timing.
+void test_display_is_vblank() {
+    using p3p3ds::hle::display_is_vblank;
+    constexpr std::uint64_t kPeriod = p3p3ds::hle::ThreadManager::kVblankPeriodUs;
+    CHECK(display_is_vblank(0u, kPeriod) == 1u);                 // "After start: vblank=1"
+    CHECK(display_is_vblank(5u * kPeriod + 631u, kPeriod) == 1u); // during vsync (631.5 us)
+    CHECK(display_is_vblank(5u * kPeriod + 731u, kPeriod) == 1u);
+    CHECK(display_is_vblank(5u * kPeriod + 740u, kPeriod) == 0u); // vblanklen: 730-740 us
+    CHECK(display_is_vblank(5u * kPeriod + 1000u, kPeriod) == 0u); // "After vblank end: vblank=0"
+    CHECK(display_is_vblank(6u * kPeriod - 1u, kPeriod) == 0u);
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    rt.invoke_import("sceDisplay", 0x4D4E10ECu, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == 1u && !rt.stopped()); // clock at 0: vblank start
+}
 } // namespace
 
 int main() {
@@ -650,6 +686,8 @@ int main() {
     test_terminate_delete_thread();
     test_umd_deactivate();
     test_umd_unregister_callback();
+    test_mpeg_decode_stop_ycbcr();
+    test_display_is_vblank();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

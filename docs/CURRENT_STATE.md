@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona: imports added ahead of the game reaching them (2026-10-11)
+
+Maintainer's request: keep implementing the imports still without HLE from the first run's import diff (42 of 193), inferring from the references, and stop only where nothing can be inferred. None of these has been called by the game yet; each is [UNVERIFIED] against Persona until a run reaches it. Each unmodelled form still stops and names the call, so a wrong inference shows up in the run log.
+
+- `tools/p1_callsites.py`: dumps every call site of the remaining imports (24 instructions before, 6 after) from the ELF with `dump_function`, and the UMD file list with first LBNs (to name `disc0:/sce_lbn...` opens). Checked on pspautotests `umd/api.prx` (the 4 `sceUmdDeactivate` calls in `api.cpp`) and `raw_access.iso` (`PARAM.SFO` at LBN 0x19).
+- `sceMpeg::0xF2930C9C` `sceMpegAvcDecodeStopYCbCr`: `*status = 0`, return 0, as upstream's `sceMpegAvcDecodeStop` and PPSSPP ([INFERRED]; JPCSP flushes one pending picture, which the placeholder decoder does not have).
+- `sceDisplay::0x4D4E10EC` `sceDisplayIsVblank`: [VERIFIED] pspautotests `display/isstate` and `vblanklen` (hardware): 1 for about 731.5 us (measured 730-740 us) from vblank start, then 0. With upstream's clock (vblank starts at multiples of 16,683 us): `(now % 16683) < 732`.
+
 ## Persona run 19 and New 3DS run 9; blocker 16: sceUmdDeactivate (2026-10-11)
 
 - [VERIFIED] Blocker 15 is cleared on both targets: the exited movie threads are deleted and `user_main` continues. PC run 19 (maintainer, `a6277550`, CTest 28/28 on Windows): execution up to the stop as in run 18. New 3DS run 9: 820 frames, 55.9 fps overall, 98 % of real time in the last 10 s.
