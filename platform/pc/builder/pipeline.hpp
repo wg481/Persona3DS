@@ -1,5 +1,5 @@
 #pragma once
-// P3P3DS Builder pipeline: user's ULUS-10512 ISO -> p3p3ds.3dsx.
+// P3P3DS Builder pipeline: user's ISO of the profile's game -> .3dsx (profile_info.hpp).
 //
 //   1. read EBOOT.BIN and PARAM.SFO from the ISO, check the disc ID
 //   2. decrypt EBOOT.BIN (psp_eboot.cpp), check the reference SHA-256
@@ -46,7 +46,7 @@ public:
     void cancel() { cancelled_ = true; }
 
     // Validation helpers for the wizard.
-    static std::string check_iso(const std::filesystem::path &iso);           // "" when it is ULUS-10512
+    static std::string check_iso(const std::filesystem::path &iso);           // "" when it is the profile's disc
     static std::string check_devkitpro(const std::filesystem::path &root);    // "" when usable
     static std::filesystem::path find_devkitpro();                            // best guess, may be empty
     static unsigned automatic_jobs();

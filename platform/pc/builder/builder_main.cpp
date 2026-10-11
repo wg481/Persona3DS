@@ -5,6 +5,7 @@
 // [--jobs <n>] [--work <dir>]` runs the same build in a console.
 // Linux and other POSIX hosts: console only, same options (`--cli` optional).
 #include "pipeline.hpp"
+#include "profile_info.hpp"
 
 #ifdef _WIN32
 #include "fun_facts.hpp"
@@ -35,7 +36,7 @@ Settings default_settings(const fs::path &exe_dir) {
     Settings s;
     s.sdk = exe_dir / "sdk";
     s.work = exe_dir / "work";
-    s.output = exe_dir / "output" / "p3p3ds.3dsx";
+    s.output = exe_dir / "output" / p3p3ds::profile::output_3dsx;
     s.devkitpro = Pipeline::find_devkitpro();
     return s;
 }
@@ -128,8 +129,8 @@ void show_page(Page p) {
 
 void validate() {
     const auto iso = fs::path(text_of(app.iso));
-    const auto iso_problem = iso.empty() ? std::string("Choose your Persona 3 Portable ISO.") : Pipeline::check_iso(iso);
-    SetWindowTextW(app.iso_status, iso_problem.empty() ? L"✔ Persona 3 Portable (ULUS-10512)" : widen(iso_problem).c_str());
+    const auto iso_problem = iso.empty() ? (std::string("Choose your ") + p3p3ds::profile::game_title + " ISO.") : Pipeline::check_iso(iso);
+    SetWindowTextW(app.iso_status, iso_problem.empty() ? L"✔ Shin Megami Tensei: Persona (ULUS-10432)" : widen(iso_problem).c_str());
     const auto dkp_problem = Pipeline::check_devkitpro(fs::path(text_of(app.dkp)));
     SetWindowTextW(app.dkp_status, dkp_problem.empty() ? L"✔ devkitPro with 3DS development tools" : widen(dkp_problem).c_str());
     EnableWindow(app.next, iso_problem.empty() && dkp_problem.empty() && !text_of(app.out).empty());
@@ -209,13 +210,13 @@ void start_build() {
                 const fs::path root = fs::path(sd + L"\\");
                 PostMessageW(wnd, WM_BUILD_PROGRESS, 0, reinterpret_cast<LPARAM>(new Progress{"Copying to the SD card", 1.0}));
                 fs::create_directories(root / "3ds");
-                fs::create_directories(root / "p3p3ds");
-                fs::copy_file(s.output, root / "3ds" / "p3p3ds.3dsx", fs::copy_options::overwrite_existing);
-                const fs::path iso_target = root / "p3p3ds" / s.iso.filename();
+                fs::create_directories(root / p3p3ds::profile::sd_folder);
+                fs::copy_file(s.output, root / "3ds" / p3p3ds::profile::output_3dsx, fs::copy_options::overwrite_existing);
+                const fs::path iso_target = root / p3p3ds::profile::sd_folder / s.iso.filename();
                 std::error_code ec;
                 if (!fs::exists(iso_target) || fs::file_size(iso_target, ec) != fs::file_size(s.iso, ec)) {
                     PostMessageW(wnd, WM_BUILD_PROGRESS, 0,
-                                 reinterpret_cast<LPARAM>(new Progress{"Copying the game image to the SD card (1.3 GB)", 1.0}));
+                                 reinterpret_cast<LPARAM>(new Progress{"Copying the game image to the SD card", 1.0}));
                     fs::copy_file(s.iso, iso_target, fs::copy_options::overwrite_existing);
                 }
             }
@@ -237,19 +238,19 @@ void create_controls() {
     const int left = 24, width = kWidth - 48;
     int y = kHeader + 20;
     // Welcome
-    add(Welcome, L"STATIC", L"Welcome to the P3P3DS Builder", SS_LEFT, left, y, width, 28, 0, app.title);
+    add(Welcome, L"STATIC", L"Welcome to the Persona3DS Builder", SS_LEFT, left, y, width, 28, 0, app.title);
     add(Welcome, L"STATIC",
-        L"This wizard builds P3P3DS - Persona 3 Portable running natively on the New Nintendo 3DS - "
-        L"from your own copy of the game (ULUS-10512).\n\n"
+        L"This wizard builds Persona3DS - Shin Megami Tensei: Persona (PSP) for the New Nintendo 3DS - "
+        L"from your own copy of the game (ULUS-10432). The port does not boot yet.\n\n"
         L"It reads the game's executable from your ISO, translates it to native 3DS code and packages "
-        L"p3p3ds.3dsx for the Homebrew Launcher. Nothing is downloaded.\n\n"
-        L"You need: your Persona 3 Portable ISO, and devkitPro with the 3DS development tools installed. "
+        L"persona3ds.3dsx for the Homebrew Launcher. Nothing is downloaded.\n\n"
+        L"You need: your Persona ISO, and devkitPro with the 3DS development tools installed. "
         L"The build takes about 5-15 minutes depending on your CPU.\n\n"
         L"The result contains code made from your game: it is for you only. Please do not share it.\n\n"
-        L"P3P3DS by enderlit aka endercodezz. Persona 3 Portable © ATLUS. This project is not affiliated with ATLUS or SEGA.",
+        L"Persona3DS by wg481, based on P3P3DS by enderlit aka endercodezz. Persona © ATLUS. This project is not affiliated with ATLUS or SEGA.",
         SS_LEFT, left, y + 40, width, 260);
     // Setup
-    add(Setup, L"STATIC", L"Persona 3 Portable image (ULUS-10512, .iso):", SS_LEFT, left, y, width, 18);
+    add(Setup, L"STATIC", L"Persona image (ULUS-10432, .iso):", SS_LEFT, left, y, width, 18);
     app.iso = add(Setup, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, left, y + 20, width - 100, 24, IdIso);
     add(Setup, L"BUTTON", L"Browse...", BS_PUSHBUTTON, left + width - 92, y + 19, 92, 26, IdIsoBrowse);
     app.iso_status = add(Setup, L"STATIC", L"", SS_LEFT, left, y + 48, width, 18, IdIsoStatus);
@@ -260,11 +261,11 @@ void create_controls() {
     app.dkp_status = add(Setup, L"STATIC", L"", SS_LEFT, left, y + 48, width - 150, 18, IdDkpStatus);
     add(Setup, L"BUTTON", L"Get devkitPro...", BS_PUSHBUTTON, left + width - 140, y + 46, 140, 24, IdDkpLink);
     y += 82;
-    add(Setup, L"STATIC", L"Save p3p3ds.3dsx to:", SS_LEFT, left, y, width, 18);
+    add(Setup, L"STATIC", L"Save persona3ds.3dsx to:", SS_LEFT, left, y, width, 18);
     app.out = add(Setup, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, left, y + 20, width - 100, 24, IdOut);
     add(Setup, L"BUTTON", L"Browse...", BS_PUSHBUTTON, left + width - 92, y + 19, 92, 26, IdOutBrowse);
     y += 60;
-    app.sd_check = add(Setup, L"BUTTON", L"Also copy P3P3DS and the ISO to my SD card:", BS_AUTOCHECKBOX, left, y, 300, 22, IdSdCheck);
+    app.sd_check = add(Setup, L"BUTTON", L"Also copy Persona3DS and the ISO to my SD card:", BS_AUTOCHECKBOX, left, y, 300, 22, IdSdCheck);
     app.sd_drive = add(Setup, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, left + 310, y, 160, 200, IdSdDrive);
     y += 30;
     wchar_t jobs[96];
@@ -296,7 +297,7 @@ void create_controls() {
     for (const auto &e : fs::directory_iterator(app.exe_dir))
         if (e.path().extension() == ".iso") { SetWindowTextW(app.iso, e.path().wstring().c_str()); break; }
     SetWindowTextW(app.dkp, Pipeline::find_devkitpro().wstring().c_str());
-    SetWindowTextW(app.out, (app.exe_dir / "output" / "p3p3ds.3dsx").wstring().c_str());
+    SetWindowTextW(app.out, (app.exe_dir / "output" / p3p3ds::profile::output_3dsx).wstring().c_str());
     fill_drives();
 }
 
@@ -312,8 +313,8 @@ void paint_header(HDC dc) {
     SetBkMode(dc, TRANSPARENT);
     SelectObject(dc, app.bold);
     SetTextColor(dc, RGB(20, 20, 20));
-    static const wchar_t *titles[] = {L"P3P3DS Builder", L"Your game and tools", L"Building P3P3DS", L"Finished"};
-    static const wchar_t *subtitles[] = {L"Persona 3 Portable for New Nintendo 3DS", L"Choose the ISO, devkitPro and where to save the result",
+    static const wchar_t *titles[] = {L"Persona3DS Builder", L"Your game and tools", L"Building Persona3DS", L"Finished"};
+    static const wchar_t *subtitles[] = {L"Persona (PSP) for New Nintendo 3DS", L"Choose the ISO, devkitPro and where to save the result",
                                          L"Translating and compiling the game code for the 3DS", L"Your build"};
     TextOutW(dc, 24, 14, titles[app.page], static_cast<int>(wcslen(titles[app.page])));
     SelectObject(dc, app.font);
@@ -408,11 +409,11 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - app.started).count();
         std::wstring text;
         if (err->empty()) {
-            text = L"P3P3DS is ready (built in " + minutes(elapsed) + L").\n\n" + text_of(app.out) +
+            text = L"Persona3DS is ready (built in " + minutes(elapsed) + L").\n\n" + text_of(app.out) +
                    L"\n\nTo play on your New 3DS, put on the SD card:\n"
-                   L"    \\3ds\\p3p3ds.3dsx\n"
-                   L"    \\p3p3ds\\<your game>.iso\n"
-                   L"and start P3P3DS from the Homebrew Launcher.\n\n"
+                   L"    \\3ds\\persona3ds.3dsx\n"
+                   L"    \\persona3ds\\<your game>.iso\n"
+                   L"and start Persona3DS from the Homebrew Launcher.\n\n"
                    L"Keep this file to yourself: it contains code made from your copy of the game.";
             ShowWindow(app.open_folder, SW_SHOW);
         } else {
@@ -491,7 +492,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     RECT r{0, 0, kWidth, kHeight};
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&r, style, FALSE);
-    app.wnd = CreateWindowExW(0, wc.lpszClassName, L"P3P3DS Builder", style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
+    app.wnd = CreateWindowExW(0, wc.lpszClassName, L"Persona3DS Builder", style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top,
                               nullptr, nullptr, inst, nullptr);
     create_controls();
     show_page(Welcome);
@@ -519,7 +520,7 @@ int main(int argc, char **argv) {
         const bool has_value = i + 1 < argc;
         if (a == "--cli") continue;
         if (a == "--help" || a == "-h") {
-            std::printf("usage: %s --iso <ULUS-10512.iso> [--devkitpro <dir>] [--out <file.3dsx>] [--jobs <n>] [--work <dir>]\n", argv[0]);
+            std::printf("usage: %s --iso <ULUS-10432.iso> [--devkitpro <dir>] [--out <file.3dsx>] [--jobs <n>] [--work <dir>]\n", argv[0]);
             return 0;
         }
         if (!has_value || (a != "--iso" && a != "--devkitpro" && a != "--out" && a != "--jobs" && a != "--work")) {

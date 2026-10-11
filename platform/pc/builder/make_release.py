@@ -37,12 +37,12 @@ RUNTIME_OBJECTS = {
 README_WINDOWS = """P3P3DS Builder {version}
 ==========================
 
-Builds P3P3DS (Persona 3 Portable for New Nintendo 3DS) from YOUR OWN copy of
+Builds Persona3DS (Shin Megami Tensei: Persona for New Nintendo 3DS) from YOUR OWN copy of
 the game. Nothing is downloaded and no game data is included here.
 
 You need
   * Windows 10 or 11 (64-bit)
-  * your Persona 3 Portable ISO, North American release ULUS-10512
+  * your Persona (PSP) ISO, North American release ULUS-10432
   * devkitPro with the "3DS Development" component
     (https://devkitpro.org/wiki/Getting_Started - Windows installer)
 
@@ -52,49 +52,49 @@ How to use
   3. Press Build. It takes about 5 to 15 minutes, depending on your CPU.
      An interrupted build continues where it stopped.
   4. Put on the SD card of your New 3DS (the builder can copy them for you):
-       \\3ds\\p3p3ds.3dsx
-       \\p3p3ds\\<your game>.iso
-     and start P3P3DS from the Homebrew Launcher.
+       \\3ds\\persona3ds.3dsx
+       \\persona3ds\\<your game>.iso
+     and start Persona3DS from the Homebrew Launcher.
 
-The resulting p3p3ds.3dsx contains code made from your copy of the game:
+The resulting persona3ds.3dsx contains code made from your copy of the game:
 keep it to yourself, do not share it.
 
-State of the port: see README.md on GitHub (saves work, no sound yet).
+State of the port: see README.md on GitHub (does not boot yet).
 
-P3P3DS by enderlit aka endercodezz - MIT License (see LICENSE.txt).
-Persona 3 Portable is (c) ATLUS. This project is not affiliated with ATLUS or SEGA.
+Persona3DS by wg481, based on P3P3DS by enderlit aka endercodezz - MIT License (see LICENSE.txt).
+Persona is (c) ATLUS. This project is not affiliated with ATLUS or SEGA.
 """
 
 README_LINUX = """P3P3DS Builder {version} (Linux x86-64)
 ========================================
 
-Builds P3P3DS (Persona 3 Portable for New Nintendo 3DS) from YOUR OWN copy of
+Builds Persona3DS (Shin Megami Tensei: Persona for New Nintendo 3DS) from YOUR OWN copy of
 the game. Nothing is downloaded and no game data is included here.
 
 You need
   * Linux x86-64 (the builder and its code generator are static binaries)
-  * your Persona 3 Portable ISO, North American release ULUS-10512
+  * your Persona (PSP) ISO, North American release ULUS-10432
   * devkitPro with the 3DS packages (https://devkitpro.org/wiki/devkitPro_pacman:
     `sudo dkp-pacman -S 3ds-dev`); found in $DEVKITPRO or /opt/devkitpro.
     NixOS: devkitPro's binaries need an FHS environment (see shell.nix, p3p-3ds).
 
 How to use
-  1. ./P3P3DS-Builder --iso "/path/to/Persona 3 Portable.iso"
+  1. ./P3P3DS-Builder --iso "/path/to/Persona.iso"
      Options: --devkitpro <dir>, --out <file.3dsx>, --jobs <n>, --work <dir>.
   2. It takes about 5 to 15 minutes, depending on your CPU.
      An interrupted build continues where it stopped.
   3. Put on the SD card of your New 3DS:
-       /3ds/p3p3ds.3dsx              (from output/)
-       /p3p3ds/<your game>.iso
-     and start P3P3DS from the Homebrew Launcher.
+       /3ds/persona3ds.3dsx            (from output/)
+       /persona3ds/<your game>.iso
+     and start Persona3DS from the Homebrew Launcher.
 
-The resulting p3p3ds.3dsx contains code made from your copy of the game:
+The resulting persona3ds.3dsx contains code made from your copy of the game:
 keep it to yourself, do not share it.
 
-State of the port: see README.md on GitHub (saves work, no sound yet).
+State of the port: see README.md on GitHub (does not boot yet).
 
-P3P3DS by enderlit aka endercodezz - MIT License (see LICENSE.txt).
-Persona 3 Portable is (c) ATLUS. This project is not affiliated with ATLUS or SEGA.
+Persona3DS by wg481, based on P3P3DS by enderlit aka endercodezz - MIT License (see LICENSE.txt).
+Persona is (c) ATLUS. This project is not affiliated with ATLUS or SEGA.
 """
 
 

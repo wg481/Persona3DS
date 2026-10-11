@@ -34,9 +34,10 @@ namespace fs = std::filesystem;
 namespace p3p3ds::builder {
 namespace {
 
-constexpr unsigned kUnitCount = 237;                 // profiles/p3p/config/aot_layout.cmake
-constexpr const char *kLoadBase = "0x08804000";
-constexpr const char *kUnitSpan = "16384";
+// From <P3P_PROFILE_DIR>/config/aot_layout.cmake (CMakeLists.txt); 0 = not measured yet.
+constexpr unsigned kUnitCount = P3P_AOT_UNIT_COUNT;
+constexpr const char *kLoadBase = P3P_AOT_LOAD_BASE;
+constexpr const char *kUnitSpan = P3P_AOT_UNIT_SPAN;
 // Measured on the largest unit and the whole program (docs/3DS_PLATFORM.md
 // section 8.5): GCSE and instruction scheduling cost 27 % of the compile
 // time for 0.8 % of code size.
@@ -224,7 +225,8 @@ std::string Pipeline::check_iso(const fs::path &iso) {
         const auto sfo = fsys.open("PSP_GAME/PARAM.SFO");
         if (!sfo) return "This image has no PSP_GAME/PARAM.SFO: it is not a PSP game.";
         const auto id = sfo_string(read_source(sfo), "DISC_ID");
-        if (id != "ULUS10512") return "This is " + (id.empty() ? std::string("an unknown disc") : id) + ", not Persona 3 Portable ULUS-10512.";
+        if (id != profile::disc_id)
+            return "This is " + (id.empty() ? std::string("an unknown disc") : id) + ", not " + profile::game_title + " " + profile::disc_id_display + ".";
         if (!fsys.open("PSP_GAME/SYSDIR/EBOOT.BIN")) return "EBOOT.BIN is missing from the image.";
         return {};
     } catch (const std::exception &e) {
@@ -295,8 +297,11 @@ void Pipeline::decrypt() {
     progress("Decrypting the game executable", 0.01);
     const auto elf = decrypt_eboot(eboot);
     const auto sha = sha256_hex(elf);
-    if (sha != kExpectedElfSha256)
-        throw std::runtime_error("The decrypted executable does not match ULUS-10512 (SHA-256 " + sha + "). Is the image modified?");
+    if (*kExpectedElfSha256 == '\0') {
+        if (log_) log_("Notice: the game profile has no reference SHA-256 yet; the executable is not verified.");
+    } else if (sha != kExpectedElfSha256) {
+        throw std::runtime_error(std::string("The decrypted executable does not match ") + profile::disc_id_display + " (SHA-256 " + sha + "). Is the image modified?");
+    }
     elf_ = s_.work / "eboot.elf";
     if (!fs::exists(elf_) || sha256_hex([&] { std::ifstream in(elf_, std::ios::binary); return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)), {}); }()) != sha) {
         std::ofstream(elf_, std::ios::binary).write(reinterpret_cast<const char *>(elf.data()), static_cast<std::streamsize>(elf.size()));
@@ -307,7 +312,10 @@ void Pipeline::decrypt() {
 void Pipeline::generate() {
     gen_ = s_.work / "generated";
     const fs::path stamp = gen_ / "builder.stamp";
-    const std::string want = std::string(kExpectedElfSha256) + " " + read_text(s_.sdk / "VERSION", 200);
+    if (kUnitCount == 0)
+        throw std::runtime_error("The game profile has no measured AOT unit count yet (aot_layout.cmake): this Builder cannot generate code.");
+    const std::string want = sha256_hex([&] { std::ifstream in(elf_, std::ios::binary); return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)), {}); }()) +
+                             " " + read_text(s_.sdk / "VERSION", 200);
     if (fs::exists(stamp) && read_text(stamp, 400) == want) {
         if (log_) log_("Generated code is up to date.");
         return;
@@ -323,7 +331,7 @@ void Pipeline::generate() {
     unsigned units = 0;
     for (const auto &e : fs::directory_iterator(gen_))
         if (e.path().filename().string().rfind("generated_unit_", 0) == 0) ++units;
-    if (units != kUnitCount) throw std::runtime_error("Code generation produced " + std::to_string(units) + " units, expected 237.");
+    if (units != kUnitCount) throw std::runtime_error("Code generation produced " + std::to_string(units) + " units, expected " + std::to_string(kUnitCount) + ".");
     write_text(stamp, want);
 }
 
@@ -426,12 +434,12 @@ void Pipeline::link_and_package() {
     if (run_tool({tool(dkp / "devkitARM" / "bin", "arm-none-eabi-g++"), joined("@", rsp)}, link_log) != 0)
         throw std::runtime_error("Linking failed:\n" + read_text(link_log));
 
-    progress("Packaging p3p3ds.3dsx", 0.98);
+    progress(std::string("Packaging ") + profile::output_3dsx, 0.98);
     const fs::path smdh = s_.work / "p3p3ds.smdh", romfs = s_.work / "romfs";
     fs::create_directories(romfs);
     fs::copy_file(elf_, romfs / "eboot.elf", fs::copy_options::overwrite_existing);
     const fs::path tool_log = s_.work / "package.log";
-    if (run_tool({tool(dkp / "tools" / "bin", "smdhtool"), "--create", "P3P3DS", "Persona 3 Portable recompilation", "enderlit aka endercodezz",
+    if (run_tool({tool(dkp / "tools" / "bin", "smdhtool"), "--create", profile::app_name, std::string(profile::game_title) + " recompilation", "wg481, based on P3P3DS by enderlit aka endercodezz",
                   dkp / "libctru" / "default_icon.png", smdh},
                  tool_log) != 0)
         throw std::runtime_error("smdhtool failed:\n" + read_text(tool_log));

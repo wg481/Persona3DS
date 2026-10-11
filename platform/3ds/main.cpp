@@ -2,25 +2,26 @@
 //
 // Top screen: the PSP framebuffer (480x272) scaled to 400x240 (nearest).
 // Bottom screen: authorship and live debug information; the same data is
-// written to sdmc:/p3p3ds/report.txt every few seconds and on exit.
+// written to sdmc:/persona3ds/report.txt every few seconds and on exit.
 //
-// Game data: sdmc:/p3p3ds/*.iso (the user's ULUS-10512 image) mounted as
-// disc0:, sdmc:/p3p3ds/ms0 as ms0:, sdmc:/p3p3ds/mods as ms0:/PSP/P3P.
+// Game data: sdmc:/persona3ds/*.iso (the user's image of the profile's game,
+// profile_info.hpp) mounted as disc0:, sdmc:/persona3ds/ms0 as ms0:, and
+// sdmc:/persona3ds/mods as the profile's mods folder when it has one.
 // The decrypted executable is read from romfs:/eboot.elf (embedded at build
 // time from the local build; it must match the generated AOT code).
 //
 // GE rendering runs on the PICA200 (gpu_renderer.cpp); no audio output yet.
 // Frame dumps for comparison with the PC runner: put a number N in
-// sdmc:/p3p3ds/dump_every.txt to save the top screen every N vblanks to
-// sdmc:/p3p3ds/frames/.
+// sdmc:/persona3ds/dump_every.txt to save the top screen every N vblanks to
+// sdmc:/persona3ds/frames/.
 // Movies: there is no H.264 decoder yet (pictures are black), so while the
 // game decodes movie frames START is pressed for it, which skips the opening
 // movie (checked on the PC runner: title screen 0.6 s after START instead of
 // at 133 s). Only while the screen shows a CPU-written picture: the title
 // screen also decodes video, and a START there would pick a menu entry.
-// An empty sdmc:/p3p3ds/play_movies.txt turns this off.
-// Short slowdowns: an empty sdmc:/p3p3ds/profile_seconds.txt writes the time
-// split of every second to sdmc:/p3p3ds/profile_seconds.csv.
+// An empty sdmc:/persona3ds/play_movies.txt turns this off.
+// Short slowdowns: an empty sdmc:/persona3ds/profile_seconds.txt writes the time
+// split of every second to sdmc:/persona3ds/profile_seconds.csv.
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/input.hpp"
 #include "p3p3ds/interpreter.hpp"
@@ -28,6 +29,7 @@
 #include "p3p3ds/profile.hpp"
 #include "p3p3ds/vfs.hpp"
 #include "bootstrap_expectations.hpp"
+#include "profile_info.hpp"
 #include "gpu_renderer.hpp"
 #include "p3p3ds/ge/async_renderer.hpp"
 #include "psprecomp/elf32.hpp"
@@ -90,7 +92,7 @@ void operator delete[](void *p, std::size_t) noexcept { std::free(p); }
 
 namespace {
 constexpr const char *kAuthor = "enderlit aka endercodezz";
-constexpr const char *kBase = "sdmc:/p3p3ds";
+constexpr const char *kBase = P3P_PROFILE_SD_BASE;
 
 struct Stats {
     u64 start_ms{}, last_report_ms{}, last_fps_ms{};
@@ -182,7 +184,7 @@ struct TimeSample {
     std::uint64_t vblanks{}, game_frames{};
 };
 std::deque<TimeSample> g_samples;
-// sdmc:/p3p3ds/profile_seconds.txt present: one CSV line per second with the
+// sdmc:/persona3ds/profile_seconds.txt present: one CSV line per second with the
 // split of that second, to find short slowdowns the 10 s report averages out.
 FILE *g_seconds_log = nullptr;
 
@@ -265,8 +267,8 @@ struct SaveMenu {
     int cursor{};
 };
 
-// PARAM.SFO texts are UTF-8 (P3P writes the hero's name in full-width
-// letters); the bottom-screen console is ASCII. Full-width forms map to ASCII,
+// PARAM.SFO texts are UTF-8 (games may write names in full-width letters);
+// the bottom-screen console is ASCII. Full-width forms map to ASCII,
 // the ideographic space to a space, anything else to '?'.
 std::string console_text(const std::string &utf8) {
     std::string out;
@@ -283,7 +285,7 @@ std::string console_text(const std::string &utf8) {
         else if (cp >= 0x20 && cp < 0x7F) out += static_cast<char>(cp);
         else if (cp >= 0xFF01 && cp <= 0xFF5E) out += static_cast<char>(cp - 0xFEE0);
         else if (cp == 0x3000) out += ' ';
-        else if (cp == 0x2640) out += 'F'; // female / male signs in P3P's save details
+        else if (cp == 0x2640) out += 'F'; // female / male signs (seen in save details)
         else if (cp == 0x2642) out += 'M';
         else if (cp >= 0x80) out += '?';
     }
@@ -299,8 +301,8 @@ void draw_save_menu(const p3p3ds::hle::SavedataDialog &d, const SaveMenu &menu) 
     const int top = std::clamp(menu.cursor - rows / 2, 0, std::max(0, n - rows));
     for (int i = top; i < std::min(n, top + rows); ++i) {
         const auto &s = d.slots[static_cast<std::size_t>(i)];
-        // Slots by number (P3P names them DATA00..DATA0f, DATA10..); the save's
-        // detail line (date, place, level) tells the saves apart.
+        // Slots by number (games name them freely, e.g. DATA00..); the save's
+        // detail line tells the saves apart.
         char number[8];
         std::snprintf(number, sizeof number, "%02d", i + 1);
         std::string line = (i == menu.cursor ? "> " : "  ") + std::string(number) + "  " +
@@ -352,12 +354,12 @@ bool update_save_menu(p3p3ds::hle::SavedataUtility &sd, SaveMenu &menu) {
 }
 std::uint64_t g_skip_presses = 0;
 
-// Unattended runs (sdmc:/p3p3ds/autotest/, for measuring on hardware or in
+// Unattended runs (sdmc:/persona3ds/autotest/, for measuring on hardware or in
 // Azahar without anyone at the controls): input.txt is a vblank-keyed input
 // script (core/include/p3p3ds/input.hpp) added to the buttons, savedata.txt a
 // slot index chosen in every save/load list (no menu), stop.txt the vblank at
 // which the run ends (report written, app closed), dump_every.txt as in
-// sdmc:/p3p3ds/, and ms0/ the memory stick used instead of sdmc:/p3p3ds/ms0
+// sdmc:/persona3ds/, and ms0/ the memory stick used instead of sdmc:/persona3ds/ms0
 // (so the player's own saves are not touched).
 struct Autotest {
     bool active{};
@@ -596,7 +598,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
     const double guest = static_cast<double>(k.threads().now()) / 1e6;
     char buf[1536];
     std::snprintf(buf, sizeof buf,
-        "P3P3DS - Persona 3 Portable (ULUS-10512)\n"
+        "%s - %s (%s)\n"
         "static recompilation port\n"
         "by %s\n"
         "build %s\n"
@@ -614,6 +616,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "stop   : %s\n"
         "%s"
         "\nSTART+SELECT: quit\n",
+        p3p3ds::profile::app_name, p3p3ds::profile::game_title, p3p3ds::profile::disc_id_display,
         kAuthor, P3P3DS_BUILD_ID, s.status.c_str(), s.fps, s.vblank_rate, wall > 0 ? 100.0 * guest / wall : 0.0, guest, wall,
         static_cast<unsigned long long>(s.frames), static_cast<unsigned long long>(k.threads().vblank_count()),
         static_cast<unsigned long>(s.buttons),
@@ -625,7 +628,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
 }
 
 void write_report(const std::string &text) {
-    if (FILE *f = std::fopen("sdmc:/p3p3ds/report.txt", "w")) {
+    if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/report.txt", "w")) {
         std::fputs(text.c_str(), f);
         std::fclose(f);
     }
@@ -687,13 +690,14 @@ int main() {
     Stats stats;
     Autotest autotest;
     stats.start_ms = stats.last_report_ms = stats.last_fps_ms = osGetTime();
-    std::printf("P3P3DS by %s\nbuild %s\n\nLoading...\n", kAuthor, P3P3DS_BUILD_ID);
+    std::printf("%s (P3P3DS by %s)\nbuild %s\n\nLoading...\n", p3p3ds::profile::app_name, kAuthor, P3P3DS_BUILD_ID);
     stats.cores = probe_cores();
     std::printf("cores: %s\n", stats.cores.c_str());
 
     stats.iso = find_iso();
     if (stats.iso.empty()) {
-        wait_exit("No .iso found in sdmc:/p3p3ds/.\nCopy your Persona 3 Portable\n(ULUS-10512) image there.");
+        wait_exit(std::string("No .iso found in " P3P_PROFILE_SD_BASE "/.\nCopy your ") + p3p3ds::profile::game_title +
+                  "\n(" + p3p3ds::profile::disc_id_display + ") image there.");
         romfsExit(); gfxExit(); return 0;
     }
 
@@ -757,7 +761,8 @@ int main() {
         kernel.io().mount("ms0:", std::make_shared<p3p3ds::vfs::HostFileSystem>(ms0), true);
         kernel.savedata().root = ms0 + "/PSP/SAVEDATA";
         // Read-only and unchanged while the game runs: lookups cached (vfs.hpp).
-        kernel.io().alias("ms0:/PSP/P3P", std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
+        if (*p3p3ds::profile::mods_alias != '\0')
+            kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
         kernel.threads().init_root_thread("root", entry, sp, module->gp);
         std::set<std::uint32_t> stubs;
         std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>> imports;
@@ -776,9 +781,9 @@ int main() {
         auto gpu = std::make_unique<p3p3ds::n3ds::GpuRenderer>();
         g_gpu = gpu.get();
         // GE back end on core 2 when the probe found a parallel core 2;
-        // sdmc:/p3p3ds/no_gpu_thread.txt keeps it on the game's thread (A/B runs).
+        // sdmc:/persona3ds/no_gpu_thread.txt keeps it on the game's thread (A/B runs).
         bool gpu_thread = stats.cores.rfind("core2 ok", 0) == 0;
-        if (FILE *f = std::fopen("sdmc:/p3p3ds/no_gpu_thread.txt", "r")) { gpu_thread = false; std::fclose(f); }
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_gpu_thread.txt", "r")) { gpu_thread = false; std::fclose(f); }
         if (gpu_thread) {
             p3p3ds::ge::WorkerHooks hooks;
             hooks.start = start_gpu_thread;
@@ -793,16 +798,16 @@ int main() {
         }
         stats.cores += g_async != nullptr ? ", GE on core2" : ", GE on core0";
         rt.memory().vram_write_observer = [](std::uint32_t address, std::size_t bytes) { gpu_note_cpu_write(address, bytes); };
-        if (FILE *f = std::fopen("sdmc:/p3p3ds/play_movies.txt", "r")) { stats.skip_movies = false; std::fclose(f); }
-        if (FILE *f = std::fopen(autotest.active ? "sdmc:/p3p3ds/autotest/dump_every.txt" : "sdmc:/p3p3ds/dump_every.txt", "r")) {
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/play_movies.txt", "r")) { stats.skip_movies = false; std::fclose(f); }
+        if (FILE *f = std::fopen(autotest.active ? P3P_PROFILE_SD_BASE "/autotest/dump_every.txt" : P3P_PROFILE_SD_BASE "/dump_every.txt", "r")) {
             unsigned long long every = 0;
             if (std::fscanf(f, "%llu", &every) == 1) stats.dump_every = every;
             std::fclose(f);
             if (stats.dump_every) std::filesystem::create_directories(std::string(kBase) + "/frames", ec);
         }
-        if (FILE *f = std::fopen("sdmc:/p3p3ds/profile_seconds.txt", "r")) {
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/profile_seconds.txt", "r")) {
             std::fclose(f);
-            g_seconds_log = std::fopen("sdmc:/p3p3ds/profile_seconds.csv", "w");
+            g_seconds_log = std::fopen(P3P_PROFILE_SD_BASE "/profile_seconds.csv", "w");
             if (g_seconds_log)
                 std::fputs("wall_s,guest_s,span_s,vblanks,game_frames,aot_pct,hle_pct,ge_pct,io_pct,present_pct,idle_pct,ui_pct,io_kib,hle_calls,speed_pct,"
                            "top_imports_ms_calls\n",
@@ -945,7 +950,7 @@ int main() {
     const auto text = report_text(stats, rt, kernel) + "stage  : " + stage + "\n" + mem_line();
     write_report(text);
     show(text);
-    if (!autotest.active) wait_exit("Report saved to sdmc:/p3p3ds/report.txt");
+    if (!autotest.active) wait_exit("Report saved to " P3P_PROFILE_SD_BASE "/report.txt");
     g_gpu = nullptr;
     g_async = nullptr;
     kernel_owner.reset(); // the GE worker stops, then the GPU renderer (citro3d) shuts down before gfx
