@@ -1,0 +1,39 @@
+# Shin Megami Tensei: Persona (PSP remake), North American release.
+# Every value marked TODO is unknown until the EBOOT is decrypted and measured
+# on the maintainer's machine; never fill one from memory or a guess.
+
+[game]
+name = "Shin Megami Tensei: Persona"
+disc_id = "ULUS10432"             # PARAM.SFO DISC_ID [UNVERIFIED until read from the ISO]
+disc_id_display = "ULUS-10432"
+region = "NTSC-U"
+release_date = "2009-09-22"       # [UNVERIFIED] public release listings
+module = "p1p"
+ram_mb = "TODO"                   # TODO: measure (psp_analyze report / PARAM.SFO)
+load_base = "TODO"                # TODO: measure; aot_layout.cmake assumes 0x08804000 [INFERRED]
+sdk_version = "TODO"              # TODO: sceKernelSetCompiledSdkVersion argument
+entry_point = "TODO"              # TODO: ELF runtime entry after relocation
+
+[checksums]
+# "TODO" = placeholder: tools/prepare_game.py prints the measured value and
+# continues with a warning. Paste the measured values here once confirmed.
+iso_md5 = "c75f75b0f1e92d7cca77d75585bebd82"   # [UNVERIFIED] third-party listing, not checked here
+encrypted_eboot_sha256 = "TODO"
+decrypted_elf_sha256 = "TODO"
+
+[runtime]
+sd_folder = "persona3ds"          # sdmc:/persona3ds on the 3DS (profile_info.hpp)
+
+[input]
+# Decrypted dump made from PSP_GAME/SYSDIR/EBOOT.BIN (tools/prepare_game.py).
+# The executable is intentionally not distributed with the repository.
+executable = "profiles/p1p/game/eboot.elf"
+game_root = "profiles/p1p/game/USRDIR"
+functions_csv = "profiles/p1p/config/p1p_functions.csv"
+nids_csv = "recomp/PSPRecomp/configs/nids.csv"
+
+[policy]
+missing_function = "stop"
+unsupported_instruction = "stop"
+allow_interpreter_fallback = false
+allow_jit_fallback = false

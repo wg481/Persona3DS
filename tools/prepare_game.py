@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-P3P3DS — Persona 3 Portable (ULUS-10512) Game Preparation Tool
+P3P3DS — Game Preparation Tool for the selected game profile
 Validates a user-supplied PSP ISO9660 image, checks game identity (PARAM.SFO),
 decrypts the Allegrex executable (EBOOT.BIN), verifies cryptographic SHA-256 hashes,
-and extracts USRDIR game assets into the local, gitignored destination (profiles/p3p/game/).
+and extracts USRDIR game assets into the local, gitignored destination (<profile>/game/).
+Disc ID and checksums come from the profile TOML (default profiles/p1p, or
+$P3P_PROFILE_DIR). A checksum still set to "TODO" is a placeholder: the measured
+value is printed and preparation continues with a warning.
 
 Usage:
-  python tools/prepare_game.py "/path/to/Persona 3 Portable.iso" [options]
+  python tools/prepare_game.py "/path/to/game.iso" [options]
 
 Options:
-  --output-dir <dir>       Destination directory (default: profiles/p3p/game)
+  --profile <dir>          Game profile directory (default: $P3P_PROFILE_DIR or profiles/p1p)
+  --output-dir <dir>       Destination directory (default: <profile>/game)
   --decrypted-eboot <path> Optional path to pre-decrypted eboot.elf (bypasses AES decryption)
   --check-only             Validate ISO identity and hashes without extracting files
   --force                  Overwrite existing files in destination directory
@@ -29,21 +33,47 @@ from pathlib import Path
 
 SECTOR_SIZE = 2048
 
-SUPPORTED_DISC_ID = "ULUS10512"
-SUPPORTED_DISC_ID_FORMATTED = "ULUS-10512"
-SUPPORTED_GAME_TITLE = "Persona3 PORTABLE"
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROFILE_DIR = os.environ.get("P3P_PROFILE_DIR", "profiles/p1p")
 
-# Verified SHA-256 of the decrypted executable (ULUS-10512)
-EXPECTED_DECRYPTED_ELF_SHA256 = (
-    "be2abbd43a4ae7ce5aa2f1f146083ffe0d924fc2eb1874e6fcdc21cba40d49db"
-)
 
-# Verified SHA-256 of the retail encrypted EBOOT.BIN from ULUS-10512 UMD
-EXPECTED_ENCRYPTED_EBOOT_SHA256 = (
-    "eeb19d9dcab8c42743151bae65dc6a40031b05f35b89db27deee5665a0be2855"
-)
+def is_placeholder(value) -> bool:
+    """Profile values not measured yet: empty or starting with TODO."""
+    return not str(value or "").strip() or str(value).strip().upper().startswith("TODO")
 
-# Sony PSP PRX / Kirk cryptography keys for Tag 0xD91613F0
+
+def load_profile(profile_dir: str = DEFAULT_PROFILE_DIR) -> dict:
+    """Identity and checksums from <profile>/config/*.toml (exactly one file)."""
+    import tomllib
+    config = Path(profile_dir)
+    if not config.is_absolute():
+        config = ROOT / config
+    tomls = sorted((config / "config").glob("*.toml"))
+    if len(tomls) != 1:
+        raise FileNotFoundError(f"Expected one profile TOML in {config / 'config'}, found {len(tomls)}")
+    data = tomllib.loads(tomls[0].read_text(encoding="utf-8"))
+    game, sums = data.get("game", {}), data.get("checksums", {})
+    disc_id = str(game.get("disc_id", "")).replace("-", "").strip()
+    return {
+        "dir": config,
+        "name": game.get("name", "?"),
+        "disc_id": disc_id,
+        "disc_id_display": game.get("disc_id_display", disc_id),
+        "iso_md5": sums.get("iso_md5", "TODO"),
+        "encrypted_eboot_sha256": sums.get("encrypted_eboot_sha256", "TODO"),
+        "decrypted_elf_sha256": sums.get("decrypted_elf_sha256", "TODO"),
+    }
+
+
+PROFILE = load_profile()
+SUPPORTED_DISC_ID = PROFILE["disc_id"]
+SUPPORTED_DISC_ID_FORMATTED = PROFILE["disc_id_display"]
+SUPPORTED_GAME_TITLE = PROFILE["name"]
+EXPECTED_DECRYPTED_ELF_SHA256 = PROFILE["decrypted_elf_sha256"]
+EXPECTED_ENCRYPTED_EBOOT_SHA256 = PROFILE["encrypted_eboot_sha256"]
+
+# Sony PSP PRX / Kirk cryptography keys for Tag 0xD91613F0 (the tag of the
+# P3P ULUS-10512 EBOOT; other games may use other tags [UNVERIFIED]).
 PSP_TAG_P3P = 0xD91613F0
 
 K_TAG_KEY = bytes([
@@ -202,7 +232,9 @@ def decrypt_eboot(eboot_bytes: bytes) -> bytes:
 
     tag, = struct.unpack_from("<I", eboot_bytes, 0xD0)
     if tag != PSP_TAG_P3P:
-        raise ValueError(f"Unsupported EBOOT.BIN tag: expected 0x{PSP_TAG_P3P:08X}, got 0x{tag:08X}")
+        raise ValueError(f"Unsupported EBOOT.BIN tag: expected 0x{PSP_TAG_P3P:08X}, got 0x{tag:08X}. "
+                         f"Decrypt the EBOOT with another tool (e.g. PPSSPP's decrypted EBOOT dump) "
+                         f"and pass it with --decrypted-eboot")
 
     attr = struct.unpack_from("<H", eboot_bytes, 0x06)[0]
     if attr & 1:
@@ -345,24 +377,34 @@ def sanitize_iso_path(iso_path: str) -> str:
 
 def prepare_p3p_game(
     iso_path: str,
-    output_dir: str = "profiles/p3p/game",
+    output_dir: str = None,
     decrypted_eboot_path: str = None,
     check_only: bool = False,
     force: bool = False,
-    verbose: bool = True
+    verbose: bool = True,
+    profile: dict = None
 ) -> bool:
+    profile = profile or PROFILE
     iso_file = Path(iso_path)
     if not iso_file.exists():
         raise FileNotFoundError(f"ISO file not found: {iso_path}")
 
-    out_dir = Path(output_dir).resolve()
+    out_dir = Path(output_dir).resolve() if output_dir else (profile["dir"] / "game").resolve()
 
     if verbose:
         print("====================================================")
-        print("   P3P3DS — Persona 3 Portable Game Preparation")
+        print(f"   P3P3DS — {profile['name']} Game Preparation")
         print("====================================================")
         print(f"ISO Image:        {iso_file.name}")
         print(f"Destination:      {out_dir}")
+        if not is_placeholder(profile["iso_md5"]):
+            md5 = hashlib.md5()
+            with open(iso_file, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    md5.update(chunk)
+            state = "matches the profile" if md5.hexdigest() == profile["iso_md5"].lower() else \
+                f"differs from the profile value {profile['iso_md5']} (notice only)"
+            print(f"ISO MD5:          {md5.hexdigest()} ({state})")
 
     with IsoReader(iso_file) as reader:
         file_catalog = {}
@@ -385,13 +427,13 @@ def prepare_p3p_game(
         if verbose:
             print("\nDetected Disc Metadata:")
             print(f"  Title:          {title}")
-            print(f"  Disc ID:        {disc_id} ({SUPPORTED_DISC_ID_FORMATTED})")
+            print(f"  Disc ID:        {disc_id} (profile: {profile['disc_id_display']})")
             print(f"  Version:        {version}")
 
-        if disc_id != SUPPORTED_DISC_ID:
+        if disc_id != profile["disc_id"]:
             raise ValueError(
                 f"Unsupported game disc ID: {disc_id}. "
-                f"P3P3DS currently supports only Persona 3 Portable USA ({SUPPORTED_DISC_ID_FORMATTED})."
+                f"The selected profile is {profile['name']} ({profile['disc_id_display']})."
             )
 
         # 2. Check & Prepare Executable (eboot.elf)
@@ -419,7 +461,9 @@ def prepare_p3p_game(
                 print(f"  Extracted EBOOT.BIN from ISO ({eboot_size:,} bytes)")
                 print(f"  Encrypted SHA-256: {enc_hash}")
 
-            if enc_hash != EXPECTED_ENCRYPTED_EBOOT_SHA256:
+            if is_placeholder(profile["encrypted_eboot_sha256"]):
+                print(f"  Warning: the profile has no encrypted EBOOT SHA-256 yet (placeholder); measured {enc_hash}")
+            elif enc_hash != profile["encrypted_eboot_sha256"]:
                 print(f"  Notice: Encrypted EBOOT SHA-256 differs from reference retail UMD dump.")
 
             if verbose:
@@ -430,15 +474,17 @@ def prepare_p3p_game(
         if verbose:
             print(f"  Decrypted SHA-256: {actual_elf_hash}")
 
-        if actual_elf_hash != EXPECTED_DECRYPTED_ELF_SHA256:
+        if is_placeholder(profile["decrypted_elf_sha256"]):
+            print(f"  Warning: the profile has no decrypted ELF SHA-256 yet (placeholder): "
+                  f"executable NOT verified. Record {actual_elf_hash} in the profile once confirmed.")
+        elif actual_elf_hash != profile["decrypted_elf_sha256"]:
             raise ValueError(
                 f"Executable SHA-256 mismatch!\n"
-                f"  Expected: {EXPECTED_DECRYPTED_ELF_SHA256}\n"
+                f"  Expected: {profile['decrypted_elf_sha256']}\n"
                 f"  Actual:   {actual_elf_hash}\n"
-                f"Please verify that your disc is an untampered retail copy of ULUS-10512."
+                f"Please verify that your disc is an untampered retail copy of {profile['disc_id_display']}."
             )
-
-        if verbose:
+        elif verbose:
             print("  Executable Hash:  [VERIFIED MATCH]")
 
         if check_only:
@@ -502,8 +548,9 @@ def prepare_p3p_game(
         print("\n====================================================")
         print("   Game Files Prepared Successfully!")
         print("====================================================")
-        print(f"Executable:  {out_dir / 'eboot.elf'} [VERIFIED]")
-        print(f"Game Assets: {out_dir / 'USRDIR'} [VERIFIED]")
+        verified = "PLACEHOLDER CHECKSUM, NOT VERIFIED" if is_placeholder(profile["decrypted_elf_sha256"]) else "VERIFIED"
+        print(f"Executable:  {out_dir / 'eboot.elf'} [{verified}]")
+        print(f"Game Assets: {out_dir / 'USRDIR'}")
         print("\nNext development steps:")
         print("  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release")
         print("  cmake --build build")
@@ -517,14 +564,19 @@ def prepare_p3p_game(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="P3P3DS — Prepare Persona 3 Portable (ULUS-10512) game data from a retail ISO image.",
+        description="P3P3DS — Prepare the selected profile's game data from a retail ISO image.",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("iso_path", help="Path to the user's Persona 3 Portable ISO file")
+    parser.add_argument("iso_path", help="Path to the user's own ISO file of the profile's game")
+    parser.add_argument(
+        "--profile",
+        default=DEFAULT_PROFILE_DIR,
+        help=f"Game profile directory (default: {DEFAULT_PROFILE_DIR})"
+    )
     parser.add_argument(
         "--output-dir",
-        default="profiles/p3p/game",
-        help="Target directory for game data (default: profiles/p3p/game)"
+        default=None,
+        help="Target directory for game data (default: <profile>/game)"
     )
     parser.add_argument(
         "--decrypted-eboot",
@@ -551,7 +603,8 @@ def main():
             decrypted_eboot_path=args.decrypted_eboot,
             check_only=args.check_only,
             force=args.force,
-            verbose=True
+            verbose=True,
+            profile=load_profile(args.profile)
         )
         sys.exit(0 if success else 1)
     except Exception as e:

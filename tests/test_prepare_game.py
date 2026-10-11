@@ -6,6 +6,7 @@ DISC_ID validation, and error handling without using proprietary files.
 """
 
 import io
+from contextlib import redirect_stdout
 import struct
 import unittest
 import tempfile
@@ -21,6 +22,8 @@ from tools.prepare_game import (
     IsoReader,
     prepare_p3p_game,
     decrypt_eboot,
+    load_profile,
+    is_placeholder,
     SUPPORTED_DISC_ID
 )
 
@@ -191,6 +194,42 @@ class TestPrepareGame(unittest.TestCase):
             self.assertIn("Unsupported game disc ID", str(ctx.exception))
         finally:
             Path(tmp_path).unlink(missing_ok=True)
+
+    def test_profile_identity_loaded(self):
+        profile = load_profile("profiles/p1p")
+        self.assertEqual(profile["disc_id"], "ULUS10432")
+        self.assertEqual(SUPPORTED_DISC_ID, load_profile()["disc_id"])
+        self.assertTrue(is_placeholder("TODO"))
+        self.assertTrue(is_placeholder(""))
+        self.assertFalse(is_placeholder("c75f75b0f1e92d7cca77d75585bebd82"))
+
+    def test_placeholder_checksum_warns_instead_of_failing(self):
+        profile = dict(load_profile("profiles/p1p"), decrypted_elf_sha256="TODO",
+                       encrypted_eboot_sha256="TODO", iso_md5="TODO")
+        sfo = create_synthetic_param_sfo({"DISC_ID": profile["disc_id"], "TITLE": "Synthetic"})
+        iso_bytes = create_synthetic_iso({"PSP_GAME/PARAM.SFO": sfo})
+        with tempfile.TemporaryDirectory() as tmp:
+            iso, elf = Path(tmp) / "game.iso", Path(tmp) / "eboot.elf"
+            iso.write_bytes(iso_bytes)
+            elf.write_bytes(b"\x7fELF synthetic")
+            out = io.StringIO()
+            with redirect_stdout(out):
+                ok = prepare_p3p_game(str(iso), decrypted_eboot_path=str(elf), check_only=True,
+                                      verbose=True, profile=profile)
+            self.assertTrue(ok)
+            self.assertIn("placeholder", out.getvalue())
+
+    def test_measured_checksum_mismatch_still_fails(self):
+        profile = dict(load_profile("profiles/p1p"), decrypted_elf_sha256="0" * 64, iso_md5="TODO")
+        sfo = create_synthetic_param_sfo({"DISC_ID": profile["disc_id"], "TITLE": "Synthetic"})
+        with tempfile.TemporaryDirectory() as tmp:
+            iso, elf = Path(tmp) / "game.iso", Path(tmp) / "eboot.elf"
+            iso.write_bytes(create_synthetic_iso({"PSP_GAME/PARAM.SFO": sfo}))
+            elf.write_bytes(b"\x7fELF synthetic")
+            with self.assertRaises(ValueError) as ctx:
+                prepare_p3p_game(str(iso), decrypted_eboot_path=str(elf), check_only=True,
+                                 verbose=False, profile=profile)
+            self.assertIn("SHA-256 mismatch", str(ctx.exception))
 
     def test_missing_iso_raises(self):
         with self.assertRaises(FileNotFoundError):
