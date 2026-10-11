@@ -30,6 +30,7 @@
 #include "p3p3ds/vfs.hpp"
 #include "bootstrap_expectations.hpp"
 #include "profile_info.hpp"
+#include "p3p3ds/fork_vfs.hpp"
 #include "gpu_renderer.hpp"
 #include "p3p3ds/ge/async_renderer.hpp"
 #include "psprecomp/elf32.hpp"
@@ -752,7 +753,8 @@ int main() {
 
         stage = "mount iso";
         kernel.umd().set_medium_present(true);
-        kernel.io().mount("disc0:", std::make_shared<p3p3ds::vfs::IsoFileSystem>(stats.iso));
+        kernel.io().mount("disc0:", std::make_shared<p3p3ds::vfs::LbnIsoFileSystem>( // + disc0:/sce_lbn (fork)
+                                        std::make_shared<p3p3ds::vfs::IsoFileSystem>(stats.iso), stats.iso));
         std::error_code ec;
         autotest = load_autotest();
         const std::string ms0 = autotest.ms0.empty() ? std::string(kBase) + "/ms0" : autotest.ms0;

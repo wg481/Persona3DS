@@ -2,6 +2,20 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona runs 6-7 and blocker 6: disc0:/sce_lbn raw-sector opens (2026-10-11)
+
+Maintainer's PC (clone at `3e394615`); CTest 27/27 on Windows.
+
+- [VERIFIED] Blocker 5 is cleared; no import is missing any more. Run 6 (1M dispatches) and run 7 (5M dispatches, frames every 60 vblanks) both end on the dispatch budget. Run 6: no new GE lists after the first three, 45,205 silent audio buffers; run 7: 226,070 silent buffers, and the only dumped frame (`frame_00000.bmp`) is black.
+- [VERIFIED] Cause (run 6 events, `summarize_events.py`): `user_main` (thread 2) repeats `sceIoOpen("disc0:/sce_lbn0xe020_size0x126b0", flags 1)` from `0x08980EBC` and gets `0x80010002` (file not found) every time: 1,310 `io_open` events, while `sndp thread` keeps feeding `sceSasCore::0xA3589D81` (stub `0x0898137C`, called from `0x08980084`) and the audio output. `thread_wait`/`thread_wake` are balanced (47,828 / 47,826): no deadlock, a retry loop.
+- Semantics [VERIFIED] uOFW `src/kd/isofs/isofs.c` (`isofsIsSceLbnPath`, `isofsParseSceLbnPath`): `/sce_lbn<hex>_size<hex>` opens `size` bytes from sector `lbn` of the disc, both numbers parsed with `strtol(..., 16)`. pspautotests `umd/raw_access` (hardware): opening `disc0:/sce_lbn0x%08X_size0x%08X` with a file's LBN and size reads the same bytes as the file opened by name (`memcmp_Raw: 0`).
+- [WRONG] for this path format: uOFW's `strlen(path) > 0x1f` rejection. The hardware test's 33-character path opens fine, so the limit is not applied (the decompiled check likely sits elsewhere in the real flow). Recorded in `core/include/p3p3ds/fork_vfs.hpp`.
+- Implementation: `core/src/fork_vfs.cpp` (`LbnIsoFileSystem`, a fork-owned wrapper around `IsoFileSystem`: `sce_lbn` paths are served from the image, everything else is passed through). The PC and 3DS runners mount it on `disc0:` (one line each); `vfs.hpp`/`vfs.cpp` are unchanged.
+- [VERIFIED] `tests/test_fork_vfs.cpp` (CTest `p3p_fork_vfs`): parser cases (Persona's path, the hardware test's format, missing `_size`, case-sensitive prefix); a synthetic image read across a sector boundary; pass-through of other paths. With pspautotests present it also opens `raw_access.iso`'s `PSP_GAME/PARAM.SFO` by name and by `sce_lbn` and compares the bytes, and shows that the plain `IsoFileSystem` returns not found for that path (run 6's failure). The shipped `raw_access.iso` has `PARAM.SFO` at LBN 25 / 420 bytes, while `raw_access.expected` was recorded with LBN 26 / 472 bytes, so the test reads the image's own directory values. Host CTest 26/26 (3 skipped); the comparison passes against a fresh pspautotests clone.
+- [UNVERIFIED] Not yet run on Persona; the 3DS runner's mount change was not compiled here (no devkitPro).
+
+Next task: the maintainer's PC run 8 with frame dumps.
+
 ## Persona run 5 and blocker 5: sceRtcGetTick (2026-10-11)
 
 Maintainer's PC (clone at `070aa0ae`), same run options; CTest 27/27 on Windows (`p3p_modulemgr` skipped). Everything before the stop is identical to run 4 (same GE lists, display, threads, audio).

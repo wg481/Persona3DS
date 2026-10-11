@@ -5,6 +5,7 @@
 #include "p3p3ds/vfs.hpp"
 #include "telemetry.hpp"
 #include "profile_info.hpp"
+#include "p3p3ds/fork_vfs.hpp"
 #include "frame_dump.hpp"
 #include "pcm_mixer.hpp"
 #include "host_input.hpp"
@@ -109,7 +110,7 @@ int main(int argc,char **argv) {
         }
         if(!umd_path.empty()) {
             auto umd=std::make_shared<p3p3ds::vfs::IsoFileSystem>(umd_path);
-            kernel.io().mount("disc0:",umd);
+            kernel.io().mount("disc0:",std::make_shared<p3p3ds::vfs::LbnIsoFileSystem>(umd,umd_path)); // + disc0:/sce_lbn (fork)
             std::cout<<"UMD image: "<<umd_path.filename().string()<<" files="<<umd->file_count()<<"\n";
         } else std::cout<<"UMD image: none (disc0: unmounted)\n";
         kernel.io().trace_reads=!io_trace_path.empty();
