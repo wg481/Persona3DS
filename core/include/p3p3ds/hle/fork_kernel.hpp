@@ -102,10 +102,25 @@ inline constexpr std::uint64_t kForkRtcEpochSeconds = 1199145600u; // = utils.cp
 // IoFileMgrForUser::0x54F5FB11
 // int sceIoDevctl(const char *dev, unsigned int cmd, void *indata, int inlen,
 //                 void *outdata, int outlen);   (uOFW src/kd/iofilemgr/iofilemgr.c)
-// Device-specific: what a command does depends on the device driver. Not
-// modelled yet: the call stops the run and names the device, command and
-// buffers, so the next run shows which command Persona needs (AGENTS.md
-// section 6: the observed call first, then its semantics).
+// Device-specific: what a command does depends on the device driver. Only
+// commands observed in Persona are modelled; any other call stops the run and
+// names the device, command and buffers (AGENTS.md section 6: the observed
+// call first, then its semantics).
+//
+// ms0: / fatms0: 0x02425818 (PSPSDK pspiofilemgr_devctl.h SCE_PR_GETDEV):
+// indata holds a pointer to SceDevInf {maxClusters, freeClusters,
+// maxSectors, sectorSize, sectorCount} (5 x u32), which the driver fills;
+// returns 0. pspautotests mstick/mstick.expected (hardware): sectorSize 512,
+// sectorCount 64; cluster counts between 256 MB and 128 GB worth. Persona
+// (run 9, 0x088188E8..0x08818938) computes sectorSize * sectorCount *
+// freeClusters / 1024 and branches when it is under 256 (KiB).
+struct MemoryStickInfo {
+    // [INFERRED] a fixed 1 GB (SI) stick, all free: deterministic, inside the
+    // hardware test's range, and small enough that Persona's 32-bit product
+    // (512 * 64 * freeClusters) does not overflow.
+    static constexpr std::uint32_t kClusters = 1000000000u / (512u * 64u);
+    static constexpr std::uint32_t kSectorSize = 512u, kSectorCount = 64u;
+};
 [[nodiscard]] std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata,
                                           std::uint32_t inlen, std::uint32_t outdata, std::uint32_t outlen);
 

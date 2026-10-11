@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 
 namespace {
 int failures = 0;
@@ -194,6 +195,35 @@ void test_devctl_reports_call() {
     CHECK(rt.stopped());
     CHECK(rt.stop_reason() == "sceIoDevctl(\"mscmhc0:\", 0x02025806, in 0x00000000/0, out 0x08B00100/4) is not modelled yet");
 }
+
+// ms0: 0x02425818 (SCE_PR_GETDEV) as Persona calls it (run 9): indata = a
+// stack word holding a pointer to the SceDevInf right after it.
+void test_devctl_ms_free_space() {
+    for (const char *name : {"ms0:", "fatms0:"}) {
+        psprecomp::Runtime rt;
+        p3p3ds::KernelState kernel;
+        p3p3ds::hle::register_all_hle_modules(rt, kernel);
+        auto &m = rt.memory();
+        constexpr std::uint32_t kName = 0x08B00000u, kSp = 0x09FEF9E0u;
+        for (std::uint32_t i = 0; name[i] != 0; ++i) m.store8(kName + i, static_cast<std::uint8_t>(name[i]));
+        m.store8(kName + static_cast<std::uint32_t>(std::char_traits<char>::length(name)), 0u);
+        m.store32(kSp, kSp + 4u);
+        rt.cpu().set_gpr(4, kName); rt.cpu().set_gpr(5, 0x02425818u); rt.cpu().set_gpr(6, kSp);
+        rt.cpu().set_gpr(7, 4u); rt.cpu().set_gpr(8, 0u); rt.cpu().set_gpr(9, 0u);
+        rt.invoke_import("IoFileMgrForUser", 0x54F5FB11u, rt.cpu());
+        CHECK(!rt.stopped());
+        CHECK(rt.cpu().gpr[2] == 0u);
+        const std::uint32_t max = m.load32(kSp + 4u), free = m.load32(kSp + 8u), sectors = m.load32(kSp + 12u);
+        const std::uint32_t size = m.load32(kSp + 16u), count = m.load32(kSp + 20u);
+        CHECK(size == 512u && count == 64u); // mstick.expected
+        constexpr std::uint32_t kMin = (256u * 1000u * 1000u) / (512u * 64u), kMax = 128000000000ull / (512u * 64u) - 1u;
+        CHECK(max >= kMin && max <= kMax && free >= kMin && free <= kMax && sectors >= kMin && sectors <= kMax);
+        // Persona's check (0x08818918..0x08818938): 32-bit sectorSize * sectorCount * freeClusters >> 10 >= 256.
+        const std::uint32_t kib = (size * count * free) >> 10;
+        CHECK(kib >= 256u);
+        CHECK(static_cast<std::uint64_t>(size) * count * free < 0x100000000ull); // no 32-bit overflow in the game's mult
+    }
+}
 } // namespace
 
 int main() {
@@ -228,6 +258,7 @@ int main() {
     test_rtc_local_time();
     test_rtc_get_tick();
     test_devctl_reports_call();
+    test_devctl_ms_free_space();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

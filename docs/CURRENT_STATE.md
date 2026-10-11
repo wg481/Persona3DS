@@ -2,6 +2,19 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 9 and blocker 7: sceIoDevctl("ms0:", 0x02425818) (2026-10-11)
+
+Maintainer's PC (clone at `b1b13c08`); CTest 28/28 on Windows (`p3p_modulemgr` skipped), including the fixed `p3p_fork_vfs`.
+
+- [VERIFIED] Frames 120 and 300 (PNG): black screen with a small grey rotating quad in the lower right corner. [INFERRED] a loading/access indicator. Execution up to the stop is identical to run 8 (528 frames, 970 silent audio buffers).
+- [VERIFIED] The stop now names the call: `sceIoDevctl("ms0:", 0x02425818, in 0x09FEF9E0/4, out 0x00000000/0)` from `0x0881890C`. `dump_function ... 0x088188D0 20`: `$a0 = 0x08A65384` ("ms0:"), `$a1 = 0x02425818`, `$a2 = $sp`, `$a3 = 4`, and in the delay slot `*$sp = $sp + 4`. After the call the game computes `*($sp+0x10) * *($sp+0x14) * *($sp+8) >> 10` and compares with 256 (`slti`): with the struct at `$sp + 4`, sectorSize * sectorCount * freeClusters in KiB.
+- Semantics [VERIFIED] PSPSDK `src/user/pspiofilemgr_devctl.h`: `0x02425818` is `SCE_PR_GETDEV`; `indata` holds a pointer to `SceDevInf {maxClusters, freeClusters, maxSectors, sectorSize, sectorCount}`. pspautotests `mstick/mstick.c` + `mstick.expected` (hardware, device `fatms0:`): sectorSize 512, sectorCount 64; max/free clusters and maxSectors between 256 MB and 128 GB worth of 32 KiB clusters.
+- Implementation in `core/src/hle/fork_kernel.cpp`: for `ms0:` / `fatms0:` with that command, a fixed 1 GB (SI) stick, all free (30,517 clusters, [INFERRED]: deterministic, inside the hardware range, and Persona's 32-bit product does not overflow), `maxSectors` = the cluster count ([INFERRED]), return 0. Every other device/command still stops with its arguments.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: the call as Persona makes it (pointer-to-pointer at `0x09FEF9E0`) for both device names: result 0, 512 / 64, counts in the hardware test's range, and Persona's free-KiB check passes without 32-bit overflow. 8 failures with the branch disabled. Host CTest 26/26 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
+Next task: the maintainer's PC run 10.
+
 ## Persona run 8: first rendered frames; blocker 7: sceIoDevctl (2026-10-11)
 
 Maintainer's PC (clone at `6733dc4b`), 5M dispatches, frames every 60 vblanks, WAV.

@@ -98,11 +98,25 @@ std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::u
 }
 
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
-    // IoFileMgrForUser::0x54F5FB11 - sceIoDevctl: report the observed call.
+    // IoFileMgrForUser::0x54F5FB11 - sceIoDevctl: modelled commands, else report the call.
     runtime.register_hle("IoFileMgrForUser", 0x54F5FB11u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
-        const std::uint32_t dev = ctx.gpr[4];
-        const std::string device = dev != 0u && rt.memory().contains(dev, 1u) ? rt.memory().read_c_string(dev, 32u) : std::string("<invalid>");
-        rt.stop(describe_devctl(device, ctx.gpr[5], ctx.gpr[6], ctx.gpr[7], ctx.gpr[8], ctx.gpr[9]));
+        auto &m = rt.memory();
+        const std::uint32_t dev = ctx.gpr[4], cmd = ctx.gpr[5], indata = ctx.gpr[6], inlen = ctx.gpr[7];
+        const std::string device = dev != 0u && m.contains(dev, 1u) ? m.read_c_string(dev, 32u) : std::string("<invalid>");
+        if ((device == "ms0:" || device == "fatms0:") && cmd == 0x02425818u && inlen >= 4u && m.contains(indata, 4u)) {
+            const std::uint32_t info = m.load32(indata);
+            if (m.contains(info, 20u)) {
+                using Ms = MemoryStickInfo;
+                m.store32(info, Ms::kClusters);       // maxClusters
+                m.store32(info + 4u, Ms::kClusters);  // freeClusters
+                m.store32(info + 8u, Ms::kClusters);  // maxSectors ([INFERRED] same range as the clusters)
+                m.store32(info + 12u, Ms::kSectorSize);
+                m.store32(info + 16u, Ms::kSectorCount);
+                ctx.set_gpr(2, 0u);
+                return;
+            }
+        }
+        rt.stop(describe_devctl(device, cmd, indata, inlen, ctx.gpr[8], ctx.gpr[9]));
     });
 
 
