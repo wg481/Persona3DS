@@ -27,6 +27,59 @@ struct Call {
         return rt.cpu().gpr[2];
     }
 };
+// scePower::0x04B7766E through the import table, replaying the parts of
+// pspautotests tests/power/power.c that do not need scePowerUnregisterCallback
+// (results from power.expected, recorded on hardware).
+struct Power {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    Power() {
+        p3p3ds::hle::register_all_hle_modules(rt, kernel);
+        kernel.threads().init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    }
+    std::int32_t cb(const char *name, std::uint32_t arg) { return kernel.threads().create_callback(name, 0x08900000u, arg); }
+    std::uint32_t reg(std::int32_t slot, std::int32_t cbid) {
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(slot));
+        rt.cpu().set_gpr(5, static_cast<std::uint32_t>(cbid));
+        rt.invoke_import("scePower", 0x04B7766Eu, rt.cpu());
+        return rt.cpu().gpr[2];
+    }
+    const p3p3ds::hle::CallbackObject &object(std::int32_t uid) { return *kernel.threads().get_callback(uid); }
+};
+
+void test_power_register_callback() {
+    { // Section 1: auto slots 0, 1, 2; the callback registered twice is notified twice.
+        Power p;
+        const auto cb1 = p.cb("powerHandler", 0x1234u), cb2 = p.cb("powerHandler2", 0x4567u);
+        CHECK(p.reg(-1, cb1) == 0u);
+        CHECK(p.reg(-1, cb2) == 1u);
+        CHECK(p.reg(-1, cb2) == 2u);
+        CHECK(!p.rt.stopped());
+        CHECK(p.object(cb1).notify_count == 1); // "powerHandler called: 00000001, 00000080"
+        CHECK(p.object(cb2).notify_count == 2); // "powerHandler2 called: 00000002, 00000080"
+        CHECK((p.object(cb1).notify_arg & 0x80u) != 0u);
+        CHECK((p.object(cb2).notify_arg & 0x80u) != 0u);
+    }
+    { // Section 3: explicit slot and errors.
+        Power p;
+        const auto cb1 = p.cb("powerHandler", 0x1234u), cb2 = p.cb("powerHandler2", 0x4567u);
+        CHECK(p.reg(0, cb1) == 0u);           // Normal
+        CHECK(p.reg(0, 0) == 0x80000100u);    // Invalid CB
+        CHECK(p.reg(-4, cb1) == 0x80000102u); // Too low slot
+        CHECK(p.reg(31, cb1) == 0x80000023u); // Too high (31)
+        CHECK(p.reg(32, cb1) == 0x80000102u); // Too high (32)
+        CHECK(p.reg(0, cb1) == 0x80000020u);  // Twice (same)
+        CHECK(p.reg(0, cb2) == 0x80000020u);  // Twice (different)
+        CHECK(p.object(cb1).notify_count == 1);
+        CHECK(p.object(cb2).notify_count == 0);
+    }
+    { // Section 4: 16 slots, then 0x80000022.
+        Power p;
+        const auto cb2 = p.cb("powerHandler2", 0x4567u);
+        for (std::uint32_t i = 0; i < 16; ++i) CHECK(p.reg(-1, cb2) == i);
+        CHECK(p.reg(-1, cb2) == 0x80000022u);
+    }
+}
 } // namespace
 
 int main() {
@@ -56,6 +109,7 @@ int main() {
         CHECK(call.rt.stop_reason().find("sceKernelSetCompiledSdkVersion500_550") != std::string::npos);
         CHECK(!call.kernel.has_compiled_sdk_version());
     }
+    test_power_register_callback();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

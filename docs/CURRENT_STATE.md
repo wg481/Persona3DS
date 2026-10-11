@@ -2,6 +2,16 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona blocker 2: scePowerRegisterCallback (2026-10-11)
+
+- Observed (run 2, previous entry): `scePower::0x04B7766E` called by the `jal` at `0x08804E1C`. Its arguments and how the game uses the result are not recorded yet.
+- Semantics [VERIFIED] pspautotests `tests/power/power.c` / `power.expected` (hardware): slot `-1` takes the first free of 16 slots and returns its index (all used: `0x80000022`); slot 0..15 returns 0 (occupied: `0x80000020`); slot 31 `0x80000023`, slots -4 and 32 `0x80000102`; callback UID 0 `0x80000100`. Registering notifies the callback: the handler then runs with its notify count (2 for a callback registered in two slots) and power info with bit `0x80` set. uOFW has no power module; PSPSDK `psppower.h` gives the prototype and the `PSP_POWER_CB_*` flags.
+- Implementation in `core/src/hle/fork_kernel.cpp` (`PowerCallbackSlots`, state owned by the registered handler, no upstream file changed): the errors above (slot range 16..31 -> `0x80000023`, other out-of-range -> `0x80000102`: [INFERRED] from the three tested slots; the order of the slot and callback checks is [INFERRED]); success notifies the callback through `ThreadManager::notify_callback` with power info `0x10E4` (AC power, battery present, 100 %: [INFERRED], the hardware test masks all but bit `0x80`). `scePowerUnregisterCallback` is not imported by Persona and not implemented.
+- [VERIFIED] `tests/test_fork_kernel.cpp` replays sections 1, 3 (without unregistering) and 4 of `power.expected` through `invoke_import`: return values, notify counts 1 and 2, bit `0x80`; 30 failures with the handler disabled. Host CTest 25/25 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona (no game data here).
+
+Next task: the maintainer's PC run 3; record its blocker.
+
 ## Persona run 2: past the SDK call, user_main started (2026-10-11)
 
 Maintainer's PC (fresh clone at `f52bb0ff`, Windows, MSYS2 UCRT64), same options as run 1 (`--umd <iso> --run-until-blocker --max-dispatches 1000000`):
