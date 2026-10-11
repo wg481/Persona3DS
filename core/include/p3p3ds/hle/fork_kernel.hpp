@@ -4,6 +4,7 @@
 // that upstream P3P3DS changes keep merging; drop an entry here if upstream
 // implements the same NID.
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace psprecomp {
@@ -245,14 +246,35 @@ struct MemoryStickInfo {
 // 0x088152A0 with $a0 = the UMD callback id at 0x08A67E50) unregisters the
 // callback before deleting it; $v0 is not read there. Results [VERIFIED]
 // pspautotests umd/api/api.expected (the registered callback -> its own id;
-// a semaphore -> 0x80010016) and umd/callbacks/umd.expected (a second
-// unregister fails). uOFW mediaman.c returns 0 instead for SDK >= 3.00
-// [UNVERIFIED which firmware]; the hardware value is used. Upstream's
-// UmdState cannot clear its callback from fork code, so the fork records
-// the unregistered id: sceUmdDeactivate no longer notifies it, but
-// upstream's sceUmdActivate still would, and re-registering the same id
-// afterwards is not seen here [INFERRED: neither is observed].
-[[nodiscard]] std::int32_t fork_umd_callback(const KernelState &kernel) noexcept; // 0 = none
+// a semaphore -> 0x80010016) and umd/callbacks/umd.expected, umd/wait (a
+// second unregister and -1 fail with 0x80010016). uOFW mediaman.c returns 0
+// instead for SDK >= 3.00 [UNVERIFIED which firmware]; the hardware value
+// is used.
+//
+// Fork-owned UMD state: upstream's UmdState has no deactivate/unregister,
+// so sceUmdDeactivate and sceUmdUnRegisterUMDCallBack rebuild it through
+// its public API (medium presence kept; activation and callback kept or
+// dropped). sceUmdGetDriveStat (umd.cpp) then reports 0x12 after a
+// deactivate, and upstream's sceUmdActivate no longer notifies an
+// unregistered callback.
+//
+// sceUmdUser 0x4A9E5E29 sceUmdWaitDriveStatCB(stat, timeout) and
+// 0x6AF9B50A sceUmdCancelWaitDriveStat(). Imported by Persona; added ahead
+// of the game reaching them. [VERIFIED] pspautotests umd/api (stat 0, 0x04,
+// 0x40, 0x80, 0xFFFFFFC4 -> 0x80010016: no bit of 0x3B set) and umd/wait
+// (any requested bit present -> 0: 0xFF matches after a deactivate; READABLE
+// after a deactivate times out with 0x800201A8; timeout 0 waits until
+// sceUmdCancelWaitDriveStat, which returns 0, also with no waiters, and
+// wakes the waiter with 0x800201A9; timeouts under ~250 us take ~250 us).
+// The drive stat is umd.cpp's sceUmdGetDriveStat value. Not modelled
+// [INFERRED: not observed]: a waiter woken early by another thread's
+// sceUmdActivate, callbacks delivered when the wait is satisfied at once,
+// and a cancel issued from a callback of the waiting thread.
+inline constexpr std::uint32_t kUmdWaitableStats = 0x3Bu;     // NOT_PRESENT|PRESENT|CHANGED|INITING|INITED|READY
+inline constexpr std::uint32_t kUmdWaitCanceled = 0x800201A9u; // SCE_KERNEL_ERROR_WAIT_CANCEL
+inline constexpr std::int32_t kUmdWaitObject = 0x554D44;       // host wait object for drive-stat waiters ("UMD")
+inline constexpr std::uint64_t kUmdMinWaitUs = 250u;
+[[nodiscard]] std::optional<std::uint32_t> umd_wait_result(std::uint32_t stat, std::uint32_t drive_stat) noexcept; // nullopt: blocks
 
 // sceMpeg 0xF2930C9C sceMpegAvcDecodeStopYCbCr(mpeg, buffer, status).
 // Imported by Persona; added ahead of the game reaching it. As upstream's

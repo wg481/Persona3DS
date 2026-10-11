@@ -7,6 +7,7 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -152,10 +153,15 @@ std::string describe_decode_stop_ycbcr(std::uint32_t mpeg, std::uint32_t buffer,
            psprecomp::hex32(status) + ") is not modelled yet";
 }
 
+std::optional<std::uint32_t> umd_wait_result(std::uint32_t stat, std::uint32_t drive_stat) noexcept {
+    if ((stat & kUmdWaitableStats) == 0u) return 0x80010016u;
+    if ((stat & drive_stat) != 0u) return 0u;
+    return std::nullopt;
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
-std::int32_t g_umd_unregistered = 0; // UMD callback id unregistered through the fork
 constexpr std::uint64_t kInterruptCheckDispatches = 32u; // dispatch boundaries between vblank checks
 constexpr std::uint32_t kVblankInterrupt = 30u;
 
@@ -184,9 +190,18 @@ void start_handlers(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, int
 }
 } // namespace
 
-std::int32_t fork_umd_callback(const KernelState &kernel) noexcept {
-    const auto registered = kernel.umd().registered_callback();
-    return registered != g_umd_unregistered ? registered : 0;
+void rebuild_umd_state(KernelState &kernel, bool activated, bool keep_callback) {
+    auto &umd = kernel.umd();
+    const bool present = umd.medium_present();
+    const auto callback = umd.registered_callback();
+    umd = hle::UmdState{};
+    umd.set_medium_present(present);
+    if (activated) (void)umd.activate(1u, "disc0:");
+    if (keep_callback && callback != 0) (void)umd.register_callback(callback, kernel.threads());
+}
+
+std::uint32_t umd_drive_stat(const hle::UmdState &umd) noexcept {
+    return !umd.medium_present() ? 0x01u : umd.activation_requested() ? 0x32u : 0x12u; // as umd.cpp sceUmdGetDriveStat
 }
 
 
@@ -238,7 +253,6 @@ bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexCo
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
     g_vblank_subintr = VblankSubInterrupts{};
-    g_umd_unregistered = 0;
     psprecomp::set_runtime_starvation_hook(&interrupt_boundary, kInterruptCheckDispatches);
     const auto subintr = [&runtime](std::uint32_t nid, auto fn) {
         runtime.register_hle("InterruptManager", nid, [fn](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
@@ -400,17 +414,18 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             try { drive = m.read_c_string(drive_ptr, 7u); } catch (const psprecomp::Error &) { drive.clear(); }
         }
         const std::uint32_t result = umd_deactivate_result(mode, drive);
+        if (result == 0u) rebuild_umd_state(kernel, false, true);
         ctx.set_gpr(2, result);
         rt.event("umd_deactivate", {{"mode", mode}, {"drive_ptr", drive_ptr}, {"result", result}});
-        if (result == 0u && fork_umd_callback(kernel) != 0)
-            (void)kernel.threads().notify_callback(rt, fork_umd_callback(kernel), 0x12u);
+        if (result == 0u && kernel.umd().registered_callback() != 0)
+            (void)kernel.threads().notify_callback(rt, kernel.umd().registered_callback(), 0x12u);
     });
 
     // sceUmdUser::0xBD2BDE07 - sceUmdUnRegisterUMDCallBack
     runtime.register_hle("sceUmdUser", 0xBD2BDE07u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-        const bool registered = uid != 0 && uid == fork_umd_callback(kernel);
-        if (registered) g_umd_unregistered = uid;
+        const bool registered = uid != 0 && uid == kernel.umd().registered_callback();
+        if (registered) rebuild_umd_state(kernel, kernel.umd().activation_requested(), false);
         const std::uint32_t result = registered ? static_cast<std::uint32_t>(uid) : 0x80010016u;
         ctx.set_gpr(2, result);
         rt.event("umd_callback_unregister", {{"uid", ctx.gpr[4]}, {"result", result}});
@@ -431,6 +446,25 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
     // sceDisplay::0x4D4E10EC - sceDisplayIsVblank
     runtime.register_hle("sceDisplay", 0x4D4E10ECu, [&kernel](psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
         ctx.set_gpr(2, display_is_vblank(kernel.threads().now(), hle::ThreadManager::kVblankPeriodUs));
+    });
+
+    // sceUmdUser::0x4A9E5E29 - sceUmdWaitDriveStatCB(stat, timeout)
+    runtime.register_hle("sceUmdUser", 0x4A9E5E29u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &tm = kernel.threads();
+        const std::uint32_t stat = ctx.gpr[4], timeout = ctx.gpr[5];
+        const auto result = umd_wait_result(stat, umd_drive_stat(kernel.umd()));
+        rt.event("umd_wait_drive_stat_cb", {{"stat", stat}, {"timeout", timeout}, {"drive", umd_drive_stat(kernel.umd())},
+                                            {"blocks", !result.has_value()}});
+        if (result) { ctx.set_gpr(2, *result); return; }
+        const auto deadline = timeout == 0u ? kNoDeadline : tm.now() + std::max<std::uint64_t>(timeout, kUmdMinWaitUs);
+        tm.block_current(rt, ctx, WaitInfo{WaitType::Umd, kUmdWaitObject, deadline, 0u, true});
+    });
+
+    // sceUmdUser::0x6AF9B50A - sceUmdCancelWaitDriveStat
+    runtime.register_hle("sceUmdUser", 0x6AF9B50Au, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const auto woken = kernel.threads().wake_host_waiters(rt, WaitType::Umd, kUmdWaitObject, kUmdWaitCanceled);
+        rt.event("umd_cancel_wait_drive_stat", {{"woken", static_cast<std::uint32_t>(woken)}});
+        ctx.set_gpr(2, 0u);
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick

@@ -592,7 +592,7 @@ void test_umd_unregister_callback() {
     CHECK(kernel.umd().register_callback(cb, kernel.threads()) == 0u);
     CHECK(unregister(sema) == 0x80010016u);               // "Unregister semaphore: 80010016"
     CHECK(unregister(cb) == static_cast<std::uint32_t>(cb)); // "Unregister callback": result == cb
-    CHECK(p3p3ds::hle::fork_umd_callback(kernel) == 0);
+    CHECK(kernel.umd().registered_callback() == 0);
     CHECK(static_cast<std::int32_t>(unregister(cb)) < 0); // umd.expected: the second one fails
     // sceUmdDeactivate no longer notifies the unregistered callback.
     constexpr std::uint32_t kDrive = 0x08A65314u;
@@ -639,6 +639,61 @@ void test_display_is_vblank() {
     p3p3ds::hle::register_all_hle_modules(rt, kernel);
     rt.invoke_import("sceDisplay", 0x4D4E10ECu, rt.cpu());
     CHECK(rt.cpu().gpr[2] == 1u && !rt.stopped()); // clock at 0: vblank start
+}
+
+// UMD drive-stat waits: pspautotests umd/api and umd/wait (hardware), and
+// the fork-owned activation state after sceUmdDeactivate.
+void test_umd_wait_drive_stat() {
+    using p3p3ds::hle::umd_wait_result;
+    for (std::uint32_t bad : {0u, 0x04u, 0x40u, 0x80u, 0xFFFFFFC4u}) CHECK(umd_wait_result(bad, 0x32u) == 0x80010016u);
+    CHECK(umd_wait_result(0x20u, 0x32u) == 0u);           // readable after activate
+    CHECK(umd_wait_result(0x02u, 0x32u) == 0u);           // "sceUmdWaitDriveStat(0x02): 0"
+    CHECK(umd_wait_result(0xFFu, 0x12u) == 0u);           // 0xFF after a deactivate: 0
+    CHECK(!umd_wait_result(0x20u, 0x12u).has_value());    // READABLE after a deactivate: waits
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &tm = kernel.threads();
+    tm.init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    kernel.umd().set_medium_present(true);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kDrive = 0x08A65314u;
+    const char name[] = "disc0:";
+    for (std::uint32_t i = 0; i < sizeof name; ++i) m.store8(kDrive + i, static_cast<std::uint8_t>(name[i]));
+    auto call = [&](std::uint32_t nid, std::uint32_t a0, std::uint32_t a1) {
+        rt.cpu().set_gpr(4, a0); rt.cpu().set_gpr(5, a1); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceUmdUser", nid, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(call(0xC6183D47u, 1u, kDrive) == 0u);           // sceUmdActivate (upstream)
+    CHECK(call(0x6B4A146Cu, 0u, 0u) == 0x32u);            // sceUmdGetDriveStat
+    CHECK(call(0x4A9E5E29u, 0x20u, 10000u) == 0u);
+    CHECK(call(0xE83742BAu, 1u, kDrive) == 0u);           // sceUmdDeactivate
+    CHECK(call(0x6B4A146Cu, 0u, 0u) == 0x12u);            // no longer readable
+    CHECK(kernel.umd().medium_present());
+    CHECK(call(0x4A9E5E29u, 0xFFu, 10000u) == 0u);
+    CHECK(call(0x4A9E5E29u, 0x04u, 10000u) == 0x80010016u);
+    CHECK(call(0x6AF9B50Au, 0u, 0u) == 0u);               // "No waiters: 00000000"
+    // READABLE after a deactivate waits: alone, the thread times out
+    // ("sceUmdWaitDriveStatCB: 800201A8") after the full timeout.
+    const auto before = tm.now();
+    CHECK(call(0x4A9E5E29u, 0x20u, 10000u) == 0x800201A8u);
+    CHECK(tm.now() - before >= 10000u);
+    // Timeout 0 waits until sceUmdCancelWaitDriveStat from another thread (800201A9).
+    const auto root = tm.current_thread_id();
+    const auto canceler = tm.create_thread("canceler", 0x08900000u, 0x20, 0x1000u, 0u, 0u, m);
+    CHECK(tm.start_thread(canceler, 0u, 0u, m, rt.cpu(), false) == 0);
+    (void)call(0x4A9E5E29u, 0x20u, 0u);
+    CHECK(tm.get_thread(root)->status == p3p3ds::hle::InternalThreadState::Waiting);
+    CHECK(tm.get_thread(root)->wait.type == p3p3ds::hle::WaitType::Umd);
+    CHECK(tm.current_thread_id() == canceler);
+    CHECK(call(0x6AF9B50Au, 0u, 0u) == 0u);
+    CHECK(tm.get_thread(root)->status != p3p3ds::hle::InternalThreadState::Waiting);
+    CHECK(tm.get_thread(root)->context.gpr[2] == 0x800201A9u);
+    CHECK(!rt.stopped());
+    CHECK(call(0xC6183D47u, 1u, kDrive) == 0u);           // activate again
+    CHECK(call(0x6B4A146Cu, 0u, 0u) == 0x32u);
 }
 } // namespace
 
@@ -688,6 +743,7 @@ int main() {
     test_umd_unregister_callback();
     test_mpeg_decode_stop_ycbcr();
     test_display_is_vblank();
+    test_umd_wait_drive_stat();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
