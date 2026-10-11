@@ -97,7 +97,17 @@ std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::u
            std::to_string(inlen) + ", out " + psprecomp::hex32(outdata) + "/" + std::to_string(outlen) + ") is not modelled yet";
 }
 
+std::string describe_subintr(std::uint32_t intno, std::uint32_t no, std::uint32_t handler, std::uint32_t arg) {
+    return "sceKernelRegisterSubIntrHandler(intno " + std::to_string(intno) + ", no " + std::to_string(no) + ", handler " +
+           psprecomp::hex32(handler) + ", arg " + psprecomp::hex32(arg) + ") is not modelled yet";
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
+    // InterruptManager::0xCA04A2B9 - sceKernelRegisterSubIntrHandler: report the observed call.
+    runtime.register_hle("InterruptManager", 0xCA04A2B9u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        rt.stop(describe_subintr(ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7]));
+    });
+
     // IoFileMgrForUser::0x54F5FB11 - sceIoDevctl: modelled commands, else report the call.
     runtime.register_hle("IoFileMgrForUser", 0x54F5FB11u, [](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         auto &m = rt.memory();

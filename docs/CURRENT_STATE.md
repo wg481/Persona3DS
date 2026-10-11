@@ -8,6 +8,7 @@ This is the current source of truth, newest entries first. Since 2026-10-11 this
 - [VERIFIED] PC run 11 (5M dispatches, same build): blocker 8 is cleared. No import is missing; the run ends on the dispatch budget after 9,912 frames / 83.9 s of virtual time. `frames_to_png.py` reports no picture change after frame 540 (~9 s), and every later frame has the same hash (`B0D203D26FE97650`, 13,411 non-black pixels). 4,958 GE lists, 639,149 `sceGeListUpdateStallAddr`, audio still silent. `InterruptManager` is never called on the PC.
 - Open question [UNVERIFIED]: why the 3DS reaches `sceKernelRegisterSubIntrHandler` (at ~591 frames, about where the PC picture freezes) while the PC does not. Candidates: different host timing of GE completion (GE on core 2), the 3DS movie/ms0 defaults, or input. The next PC run uses an input script (START presses) and dumps the last frame to see what the static screen is.
 - `tools/p1_report.sh` takes an optional input script (4th argument) and also converts the last frame to PNG.
+- `sceKernelRegisterSubIntrHandler` (`InterruptManager::0xCA04A2B9`) now stops with its arguments (`describe_subintr` in `core/src/hle/fork_kernel.cpp`, checked by `tests/test_fork_kernel.cpp`), so the next 3DS report names the interrupt, sub-interrupt, handler and argument before the feature (running a guest handler per interrupt) is built.
 
 ## Persona run 10 and blocker 8: sceIoDevctl("fatms0:", 0x02425823) (2026-10-11)
 

@@ -133,6 +133,14 @@ struct MemoryStickInfo {
 [[nodiscard]] std::string describe_devctl(const std::string &device, std::uint32_t cmd, std::uint32_t indata,
                                           std::uint32_t inlen, std::uint32_t outdata, std::uint32_t outlen);
 
+// InterruptManager::0xCA04A2B9
+// int sceKernelRegisterSubIntrHandler(int intno, int no, void *handler, void *arg);
+// (uOFW src/kd/interruptman exports). Reached on the New 3DS (first run,
+// 591 frames) but not yet on the PC. Running a guest handler on every
+// interrupt is a scheduler feature; until Persona's arguments are observed
+// the call stops the run and names them.
+[[nodiscard]] std::string describe_subintr(std::uint32_t intno, std::uint32_t no, std::uint32_t handler, std::uint32_t arg);
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);
 
 } // namespace p3p3ds::hle

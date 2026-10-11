@@ -196,6 +196,17 @@ void test_devctl_reports_call() {
     CHECK(rt.stop_reason() == "sceIoDevctl(\"mscmhc0:\", 0x02025806, in 0x00000000/0, out 0x08B00100/4) is not modelled yet");
 }
 
+// InterruptManager::0xCA04A2B9: not modelled; the stop names the call (first 3DS run).
+void test_subintr_reports_call() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    rt.cpu().set_gpr(4, 30u); rt.cpu().set_gpr(5, 2u); rt.cpu().set_gpr(6, 0x08812340u); rt.cpu().set_gpr(7, 0u);
+    rt.invoke_import("InterruptManager", 0xCA04A2B9u, rt.cpu());
+    CHECK(rt.stopped());
+    CHECK(rt.stop_reason() == "sceKernelRegisterSubIntrHandler(intno 30, no 2, handler 0x08812340, arg 0x00000000) is not modelled yet");
+}
+
 // fatms0: 0x02425823 as Persona calls it (run 10): out = a stack word, outlen 4.
 void test_devctl_fat_ready() {
     psprecomp::Runtime rt;
@@ -281,6 +292,7 @@ int main() {
     test_devctl_reports_call();
     test_devctl_ms_free_space();
     test_devctl_fat_ready();
+    test_subintr_reports_call();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
