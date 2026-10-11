@@ -2,6 +2,20 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 3 and blocker 3: sceCtrlSetSamplingCycle (2026-10-11)
+
+Maintainer's PC (clone at `bfd9d732`, Windows, MSYS2 UCRT64), same run options:
+
+- [VERIFIED] CTest 27/27 passed on Windows with `references/` fetched (only `p3p_modulemgr` skipped), including `p3p_mpeg`, `p3p_psp_eboot`, `p3p_fork_kernel`, `p3p_interpreter_differential` and `p3p_autotest_baseline`.
+- [VERIFIED] Blocker 2 is cleared. `dump_function ... 0x08804DE0 20`: `jal 0x08980FA4` at `0x08804E0C` with `$a0 = 0x08A601C8`, `$a1 = 0x08804B08`, `$a2 = 0` ([INFERRED] `sceKernelCreateCallback(name, handler, arg)`), then `scePowerRegisterCallback` at `0x08804E1C` with `$a0 = 0` (slot 0) and `$a1` = that call's result (the callback UID). The code that follows does not read `$v0`.
+- [VERIFIED] New stop: `Missing HLE import sceCtrl::sceCtrlSetSamplingCycle` (NID `0x6A2774F3`, `recomp/PSPRecomp/src/nid_registry.cpp:87`) at `0x0898116C`, reached by a `j` (word `0x0A26045B`, a tail call) at `0x08804F7C`. Its `$a0` is not recorded yet. Threads as in run 2; no interpreter, audio, GE or VRAM activity.
+- Semantics [VERIFIED] uOFW `src/kd/ctrl/ctrl.c` (`sceCtrlSetSamplingCycle`): 0 selects per-vblank sampling, 5555..20000 a timer every `cycle` us; both return the previous cycle. Other values return `0x800001FE` and change nothing. pspautotests `ctrl/vblank.expected`: `sceCtrlSetSamplingCycle(0)` returns 0 at boot.
+- Implementation in `core/src/hle/fork_kernel.cpp` (`CtrlSamplingCycle`): 0 and invalid values as above. A timer cycle stops the run with a named reason, because the runtime samples input per vblank only (`core/src/hle/ctrl.cpp`). It is implemented only if Persona turns out to pass one.
+- [VERIFIED] `tests/test_fork_kernel.cpp`: 0 returns the previous cycle (0); 1, 5554, 20001 and `0xFFFFFFFF` return `0x800001FE`; 5555, 16666 and 20000 stop the run with the reason. 7 failures with the handler disabled. Host CTest 25/25 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
+Next task: the maintainer's PC run 4.
+
 ## Persona blocker 2: scePowerRegisterCallback (2026-10-11)
 
 - Observed (run 2, previous entry): `scePower::0x04B7766E` called by the `jal` at `0x08804E1C`. Its arguments and how the game uses the result are not recorded yet.

@@ -48,6 +48,26 @@ private:
     std::int32_t slots_[kSlots]{}; // callback UID, 0 = free
 };
 
+// sceCtrl::0x6A2774F3
+// int sceCtrlSetSamplingCycle(unsigned int cycle);
+// uOFW src/kd/ctrl/ctrl.c (sceCtrlSetSamplingCycle): 0 = sample at every
+// vblank, 5555..20000 = sample every `cycle` microseconds from a timer; both
+// return the previous cycle. Any other value returns 0x800001FE
+// (SCE_ERROR_INVALID_VALUE) and changes nothing. pspautotests
+// ctrl/vblank.expected: sceCtrlSetSamplingCycle(0) on a fresh boot returns 0.
+// The runtime samples once per vblank only (ctrl.cpp), so a timer cycle is
+// reported as unsupported instead of being accepted silently.
+enum class SamplingCycleResult { Ok, Invalid, TimerNotModelled };
+class CtrlSamplingCycle {
+public:
+    static constexpr std::uint32_t kInvalidValue = 0x800001FEu;
+    SamplingCycleResult set(std::uint32_t cycle, std::uint32_t *previous) noexcept;
+    [[nodiscard]] std::uint32_t cycle() const noexcept { return cycle_; }
+
+private:
+    std::uint32_t cycle_{}; // 0: vblank sampling (boot state)
+};
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);
 
 } // namespace p3p3ds::hle

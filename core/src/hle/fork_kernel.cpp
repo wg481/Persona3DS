@@ -7,6 +7,7 @@
 #include "psprecomp/runtime.hpp"
 
 #include <memory>
+#include <string>
 
 namespace p3p3ds::hle {
 
@@ -42,7 +43,31 @@ std::int32_t PowerCallbackSlots::register_callback(std::int32_t slot, std::int32
     return result;
 }
 
+SamplingCycleResult CtrlSamplingCycle::set(std::uint32_t cycle, std::uint32_t *previous) noexcept {
+    if (cycle != 0u && (cycle < 5555u || cycle > 20000u)) return SamplingCycleResult::Invalid;
+    if (cycle != 0u) return SamplingCycleResult::TimerNotModelled;
+    *previous = cycle_;
+    cycle_ = cycle;
+    return SamplingCycleResult::Ok;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
+    // sceCtrl::0x6A2774F3 - sceCtrlSetSamplingCycle
+    auto sampling = std::make_shared<CtrlSamplingCycle>();
+    runtime.register_hle("sceCtrl", 0x6A2774F3u, [sampling](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const std::uint32_t cycle = ctx.gpr[4]; // $a0
+        std::uint32_t previous = 0;
+        switch (sampling->set(cycle, &previous)) {
+        case SamplingCycleResult::Ok: ctx.set_gpr(2, previous); break;
+        case SamplingCycleResult::Invalid: ctx.set_gpr(2, CtrlSamplingCycle::kInvalidValue); break;
+        case SamplingCycleResult::TimerNotModelled:
+            rt.stop("sceCtrlSetSamplingCycle: timer sampling every " + std::to_string(cycle) +
+                    " us is not modelled (input is sampled per vblank)");
+            break;
+        }
+    });
+
+
     // scePower::0x04B7766E - scePowerRegisterCallback
     auto power = std::make_shared<PowerCallbackSlots>();
     runtime.register_hle("scePower", 0x04B7766Eu,

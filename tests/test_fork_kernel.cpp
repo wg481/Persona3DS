@@ -80,6 +80,36 @@ void test_power_register_callback() {
         CHECK(p.reg(-1, cb2) == 0x80000022u);
     }
 }
+// sceCtrl::0x6A2774F3 through the import table (uOFW ctrl.c semantics).
+void test_ctrl_sampling_cycle() {
+    struct Ctrl {
+        psprecomp::Runtime rt;
+        p3p3ds::KernelState kernel;
+        Ctrl() { p3p3ds::hle::register_all_hle_modules(rt, kernel); }
+        std::uint32_t set(std::uint32_t cycle) {
+            rt.cpu().set_gpr(4, cycle);
+            rt.cpu().set_gpr(2, 0xDEADBEEFu);
+            rt.invoke_import("sceCtrl", 0x6A2774F3u, rt.cpu());
+            return rt.cpu().gpr[2];
+        }
+    };
+    {
+        Ctrl c;
+        CHECK(c.set(0u) == 0u); // pspautotests ctrl/vblank.expected: "sceCtrlSetSamplingCycle: 00000000"
+        CHECK(c.set(0u) == 0u);
+        CHECK(c.set(1u) == 0x800001FEu);
+        CHECK(c.set(5554u) == 0x800001FEu);
+        CHECK(c.set(20001u) == 0x800001FEu);
+        CHECK(c.set(0xFFFFFFFFu) == 0x800001FEu);
+        CHECK(!c.rt.stopped());
+    }
+    for (const std::uint32_t cycle : {5555u, 16666u, 20000u}) {
+        Ctrl c;
+        (void)c.set(cycle);
+        CHECK(c.rt.stopped());
+        CHECK(c.rt.stop_reason().find("sceCtrlSetSamplingCycle") != std::string::npos);
+    }
+}
 } // namespace
 
 int main() {
@@ -110,6 +140,7 @@ int main() {
         CHECK(!call.kernel.has_compiled_sdk_version());
     }
     test_power_register_callback();
+    test_ctrl_sampling_cycle();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
