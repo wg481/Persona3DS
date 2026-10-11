@@ -1,0 +1,7 @@
+# Boot to the title screen and stop pressing (Persona ULUS-10432): the presses of
+# boot_presses.txt up to vblank 1100 (logos and intro movie), then nothing, so a run
+# ends at the title menu with its default cursor. Format: core/include/p3p3ds/input.hpp.
+600 START 6
+660 CROSS 6
+900 START 6
+960 CROSS 6

@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Milestone: Persona reaches its menus (Load Game screen) on PC and New 3DS (2026-10-11)
+
+- [VERIFIED] Maintainer, current code (`cba6bd6a`): the PC run no longer stops on a blocker; it sits on the game's Load Game screen with every thread waiting, so the dispatch budget is never reached and the run was interrupted by hand (no report 22). New 3DS run 12: the same Load Game screen, left running and quit with START+SELECT: 3,402 frames, 72.3 s of guest time in 115.2 s wall (63 %), last 10 s at 47 % with HLE at 61 % and 34 % idle, 221,961 draws, 1,238 texture uploads in total, linear memory free 2,257 KiB, no failed allocation.
+- [INFERRED] the boot input script (START, then CROSS 60 vblanks later, every 300 vblanks until vblank 12,000) chose the title menu's default entry, which led to Load Game. To start a new game the input has to pick New Game; the menu layout and default cursor are not known yet.
+- `tools/p1_report.sh` takes a 5th argument, the stop vblank (default 9000, about 150 s of game time; the runner's `--stop-vblank`), so a run waiting at a menu ends with a report; it now also converts every distinct screen from frame 1800 on (up to 16) to PNG. New input script `profiles/p1p/input/to_title.txt`: the boot presses up to vblank 1100, then none, so a run ends at the title menu with its default cursor (parse-checked).
+- 3DS controls (`platform/3ds/main.cpp`): B is CROSS (confirm in the US release), A is CIRCLE (back), Y is SQUARE, X is TRIANGLE.
+- Next task: the title menu's layout (PNG from a `to_title.txt` run, or the maintainer's description from the 3DS), then an input script that selects New Game.
+
 ## Persona run 21 and New 3DS run 11: BGM thread ran, new screens; blocker 18: sceKernelExitDeleteThread (2026-10-11)
 
 - [VERIFIED] Blocker 17 is cleared: `sceKernelPollEventFlag` (real NID) works and `thread BGM` runs its sceAtrac sequence on `bgm42.at3`. PC run 21 (maintainer, `8363a7b6`, CTest 29/29 on Windows): 2,750 frames; from frame 2,280 the picture changes again (new frame hashes every 60 frames, last frame 363 non-black pixels), GE lists of 1,335 commands, CLUT8 textured draws up from 3,019 to 8,955; non-silent audio frames up from 8,144 to 24,432 ([INFERRED] the game's own sound effects or jingles through sceSas/sceAudio; the ATRAC BGM is silent by design). Then `thread BGM` (uid 22) ends with `ThreadManForUser` NID `0x809CE29B` (`sceKernelExitDeleteThread`, stub `0x08981044`) from `0x0881128C`, `$a0 = 1`, after releasing its ATRAC ID (stub `0x089810B4`), closing a file (`0x08980E94`) and one more ThreadMan call (`0x08980FB4`).
