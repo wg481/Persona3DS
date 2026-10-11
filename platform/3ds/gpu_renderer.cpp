@@ -24,7 +24,12 @@ constexpr std::uint32_t kVertexBytes = 1u << 20;    // vertices and indices per 
 static_assert(kVertexBytes / 28u < 0x10000u, "u16 indices count vertices from the arena start");
 constexpr std::uint32_t kIndexBytes = 256u << 10; // batched model indices per GPU frame, after the vertices
 constexpr std::uint32_t kRunVertices = 1024;      // vertices reserved for a run of contiguous model draws
-constexpr std::uint32_t kTextureBudget = 6u << 20;  // linear memory for decoded textures
+// P3P3DS: 6 -> 18 MiB. Persona's title screen draws 18 textures, 10 of them 512x512
+// CLUT8 with an 8888 palette (decoded to RGBA8, 1 MiB each): about 12 MiB per frame
+// (PC --draw-log of displayed frame 2401). At 6 MiB every frame evicted and re-uploaded
+// them (63% of time in uploads, 11 fps) and the 1 MiB allocations that failed dropped
+// their draws. platform/3ds/main.cpp grows the linear heap to match.
+constexpr std::uint32_t kTextureBudget = 18u << 20; // linear memory for decoded textures
 constexpr std::uint32_t kCommandBufferBytes = 0xC0000; // C3D_Init
 // Submit the queued frame when the citro3d command buffer (kCommandBufferBytes)
 // is this full: GPUCMD_Add panics (svcBreak) on overflow. One draw adds a few

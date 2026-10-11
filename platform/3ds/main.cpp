@@ -61,13 +61,16 @@ void apply_generated_patches(GuestMemory &);
 
 // libctru: main thread stack. Translated guest code chains through host calls.
 // Linear (GPU-visible) heap: screen framebuffers, the citro3d command buffer,
-// vertices and decoded textures (gpu_renderer.cpp budgets 6 MiB of them).
+// vertices and decoded textures (gpu_renderer.cpp budgets 18 MiB of them).
 // libctru's default split caps the normal heap at 24 MiB
 // (libctru/source/system/allocateHeaps.c, HEAP_SPLIT_SIZE_CAP), which cannot
 // hold the 32 MiB guest RAM; a fixed linear size gives the rest to the heap.
 extern "C" {
 u32 __stacksize__ = 1024u * 1024u;
-u32 __ctru_linear_heap_size = 12u * 1024u * 1024u;
+// Persona3DS: 12 -> 28 MiB for the 18 MiB texture budget. The normal heap
+// (93.7 MiB at 12) peaked at 56.7 MiB in use in-game on the New 3DS (report
+// 2026-10-11), so 16 MiB moved to linear leaves it about 21 MiB of margin.
+u32 __ctru_linear_heap_size = 28u * 1024u * 1024u;
 }
 
 // Heap diagnostics for the report: size of the last allocation that failed.

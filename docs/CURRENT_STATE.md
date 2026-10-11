@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## New 3DS title screen: texture budget too small for Persona (2026-10-11)
+
+- [VERIFIED] PC draw log of the title screen (`--draw-log-from 2400`, maintainer upload `title_draws.txt`): 28 draws using 18 distinct textures, 10 of them 512x512 CLUT8 with an 8888 palette (`fmt=5`, `clut=00FF03`). `pica_format` (`platform/3ds/gpu_renderer.cpp`) decodes those to RGBA8, 1 MiB each; the whole frame needs about 12 MiB of decoded textures.
+- [VERIFIED] New 3DS report on the title screen (maintainer, 2026-10-11): 11.1 fps, 72 % of real time (36 % in the last 10 s), GE texture upload 63.2 % of the time, 796 uploads for 15 cached textures, linear memory free 253 KiB. Screenshot: only the logo, "PRESS ANY BUTTON", the copyright line and the two edge silhouettes (small textures) show; the full-screen background, the crowd silhouettes, the light shafts and the button bar (the 512x512 / 512x256 textures) are missing.
+- [INFERRED] cause: the renderer's texture budget (`kTextureBudget`, 6 MiB) is half the frame's working set, so `evict_textures` drops textures every frame and they are re-uploaded (the time), and when a 1 MiB `C3D_TexInit` fails in the 12 MiB linear heap `bind_texture` returns null and the draw is skipped (the missing elements). The falling "linear free" in earlier reports (6,605 -> 253 KiB) fits textures filling the budget.
+- Fix (`P3P3DS:` patch): `kTextureBudget` 6 -> 18 MiB in `platform/3ds/gpu_renderer.cpp`, and `__ctru_linear_heap_size` 12 -> 28 MiB in `platform/3ds/main.cpp`. The normal heap drops from 93.7 to about 77.7 MiB; the highest in-use value in the maintainer's 3DS reports is 56.7 MiB (in-game), so about 21 MiB of margin remains. [UNVERIFIED] on hardware until the next 3DS title-screen report (expected: full title screen, uploads stop growing while on it).
+- Renderer patches in this fork (`P3P3DS:` markers): `gpu_renderer.cpp` `kTextureBudget`.
+
 ## Maintainer decisions: renderer edits, media conversion (2026-10-11)
 
 - `platform/3ds/gpu_renderer.*` may now get minimal, evidence-backed patches for Persona's rendering, each marked `P3P3DS:` and listed here (CLAUDE.md / AGENTS.md section 1 updated). First target: the title screen, which the PC draws completely (run 23 PNGs) while the New 3DS misses much of it and runs at 11.1 fps. Evidence first: a PC draw log of a title frame (`--draw-log`, one line per draw with the full GE state), compared with what `gpu_renderer.cpp` handles (it skips points and lines, and re-uploads a CLUT texture whenever its palette hash, CLUT register or data hash changes).
