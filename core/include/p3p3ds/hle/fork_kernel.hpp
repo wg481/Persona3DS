@@ -68,6 +68,23 @@ private:
     std::uint32_t cycle_{}; // 0: vblank sampling (boot state)
 };
 
+// sceRtc::0xE7C27D1B
+// int sceRtcGetCurrentClockLocalTime(ScePspDateTime *time);
+// uOFW src/kd/rtc/rtc.c: a kernel-space pointer from user mode returns
+// 0x80000023 (SCE_ERROR_PRIV_REQUIRED); otherwise the current tick plus the
+// system time-zone offset is written as ScePspDateTime (PSPSDK psptypes.h:
+// u16 year, month, day, hour, minute, second; u32 microsecond = 16 bytes)
+// and 0 is returned. pspautotests rtc/rtc.expected: "Normal: 00000000" and a
+// valid date and time. The clock is the virtual clock on the same fixed
+// epoch as sceKernelLibcTime (core/src/hle/utils.cpp: 2008-01-01 00:00 UTC,
+// [INFERRED] for determinism) with time-zone offset 0 [INFERRED].
+struct PspDateTime {
+    std::uint16_t year, month, day, hour, minute, second;
+    std::uint32_t microsecond;
+};
+inline constexpr std::uint64_t kForkRtcEpochSeconds = 1199145600u; // = utils.cpp kEpochSeconds
+[[nodiscard]] PspDateTime psp_date_time(std::uint64_t unix_microseconds) noexcept;
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel);
 
 } // namespace p3p3ds::hle

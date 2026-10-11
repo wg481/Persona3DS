@@ -51,7 +51,39 @@ SamplingCycleResult CtrlSamplingCycle::set(std::uint32_t cycle, std::uint32_t *p
     return SamplingCycleResult::Ok;
 }
 
+PspDateTime psp_date_time(std::uint64_t unix_microseconds) noexcept {
+    const std::uint64_t seconds = unix_microseconds / 1000000u;
+    const std::uint64_t days = seconds / 86400u, rest = seconds % 86400u;
+    // Proleptic Gregorian civil date from days since 1970-01-01 (H. Hinnant's
+    // civil_from_days, for non-negative day counts).
+    const std::uint64_t z = days + 719468u, era = z / 146097u, doe = z - era * 146097u;
+    const std::uint64_t yoe = (doe - doe / 1460u + doe / 36524u - doe / 146096u) / 365u;
+    const std::uint64_t doy = doe - (365u * yoe + yoe / 4u - yoe / 100u), mp = (5u * doy + 2u) / 153u;
+    const std::uint64_t day = doy - (153u * mp + 2u) / 5u + 1u, month = mp < 10u ? mp + 3u : mp - 9u;
+    const std::uint64_t year = yoe + era * 400u + (month <= 2u ? 1u : 0u);
+    return PspDateTime{static_cast<std::uint16_t>(year), static_cast<std::uint16_t>(month), static_cast<std::uint16_t>(day),
+                       static_cast<std::uint16_t>(rest / 3600u), static_cast<std::uint16_t>(rest / 60u % 60u),
+                       static_cast<std::uint16_t>(rest % 60u), static_cast<std::uint32_t>(unix_microseconds % 1000000u)};
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
+    // sceRtc::0xE7C27D1B - sceRtcGetCurrentClockLocalTime
+    runtime.register_hle("sceRtc", 0xE7C27D1Bu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        const std::uint32_t out = ctx.gpr[4]; // $a0
+        if ((out & 0x80000000u) != 0u) { ctx.set_gpr(2, 0x80000023u); return; }
+        if (!rt.memory().contains(out, 16u)) { // a real PSP faults (rtc.c: "NULL ... Crash")
+            rt.stop("sceRtcGetCurrentClockLocalTime: output " + psprecomp::hex32(out) + " is not guest memory");
+            return;
+        }
+        const auto t = psp_date_time(kForkRtcEpochSeconds * 1000000u + kernel.threads().now());
+        auto &m = rt.memory();
+        m.store16(out, t.year); m.store16(out + 2u, t.month); m.store16(out + 4u, t.day);
+        m.store16(out + 6u, t.hour); m.store16(out + 8u, t.minute); m.store16(out + 10u, t.second);
+        m.store32(out + 12u, t.microsecond);
+        ctx.set_gpr(2, 0u);
+    });
+
+
     // sceCtrl::0x6A2774F3 - sceCtrlSetSamplingCycle
     auto sampling = std::make_shared<CtrlSamplingCycle>();
     runtime.register_hle("sceCtrl", 0x6A2774F3u, [sampling](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {

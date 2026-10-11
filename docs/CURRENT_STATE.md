@@ -2,6 +2,20 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 4: first GE lists, display mode, sound threads; blocker 4: sceRtcGetCurrentClockLocalTime (2026-10-11)
+
+Maintainer's PC (clone at `8bf29028`), same run options; CTest 27/27 on Windows (`p3p_modulemgr` skipped).
+
+- [VERIFIED] Blocker 3 is cleared. `dump_function ... 0x08804F50 14`: `jal 0x0898115C` at `0x08804F6C` with `$a0 = 1` ([INFERRED] `sceCtrlSetSamplingMode(1)`, analog), then `$a0 = 0` (`addu a0,zero,zero` at `0x08804F74`) and the tail `j` to `sceCtrlSetSamplingCycle` at `0x08804F7C`: Persona uses per-vblank sampling, the runtime's model.
+- [VERIFIED] New activity before the stop: GE callback `id=0` (signal `0x089782E0`, finish `0x08978360`); GE lists 1 (`0x08A66C44`, 212 commands), 2 (56 commands) and 3 (67 commands), each completed once; `sceDisplaySetMode(0, 480, 272)` twice; framebuffers `0x04088000` and `0x04000000`, stride 512, format 3 (8888); GE state color `0x04000000`, depth `0x04110000`, stride 512; threads `sndp thread` (uid 9, priority 16) and `SceWaveMain` (uid 11, priority 18); audio 3 buffers / 2,240 frames, all silent. No interpreter entries, no VRAM writes from the CPU.
+- [VERIFIED] New stop: `Missing HLE import sceRtc::0xE7C27D1B` (`sceRtcGetCurrentClockLocalTime`, uOFW `src/kd/rtc/exports`) at `0x089812F4`, called by the `jal` at `0x088160C8`. Its argument is not recorded yet.
+- Semantics [VERIFIED] uOFW `src/kd/rtc/rtc.c` (`sceRtcGetCurrentClockLocalTime` -> `sceRtcGetCurrentClock(time, tz)`): a kernel pointer from user mode returns `0x80000023`; otherwise the current tick plus the time-zone offset is written as `ScePspDateTime` (PSPSDK `psptypes.h`, 16 bytes) and 0 returned. pspautotests `rtc/rtc.expected`: "Normal: 00000000", valid year/date/time/microseconds; NULL crashes the real PSP (`rtc.c`).
+- Implementation in `core/src/hle/fork_kernel.cpp`: date from the virtual clock on the same fixed epoch as upstream's `sceKernelLibcTime` (`core/src/hle/utils.cpp`, 2008-01-01 00:00 UTC, [INFERRED] for determinism), time-zone offset 0 [INFERRED]; a pointer outside guest memory stops the run (the PSP faults).
+- [VERIFIED] `tests/test_fork_kernel.cpp`: date conversion (1970-01-01, 2008-02-29, 2008-03-01 01:01:01.5, 2000-02-29) and the import: `$v0 = 0`, 2008-01-01 00:00:00.000000 written at virtual time 0, `0x80000023` for `0x88000000`, a stop for NULL. 4 failures with the handler disabled. Host CTest 25/25 (3 skipped).
+- [UNVERIFIED] Not yet run on Persona.
+
+Next task: the maintainer's PC run 5.
+
 ## Persona run 3 and blocker 3: sceCtrlSetSamplingCycle (2026-10-11)
 
 Maintainer's PC (clone at `bfd9d732`, Windows, MSYS2 UCRT64), same run options:

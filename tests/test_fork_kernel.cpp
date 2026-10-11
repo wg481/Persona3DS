@@ -110,6 +110,37 @@ void test_ctrl_sampling_cycle() {
         CHECK(c.rt.stop_reason().find("sceCtrlSetSamplingCycle") != std::string::npos);
     }
 }
+// sceRtc::0xE7C27D1B (uOFW rtc.c; pspautotests rtc/rtc.expected).
+void test_rtc_local_time() {
+    using p3p3ds::hle::psp_date_time;
+    { const auto t = psp_date_time(0u); CHECK(t.year == 1970 && t.month == 1 && t.day == 1 && t.hour == 0 && t.second == 0); }
+    { // 2008 is a leap year: day 60 after 2008-01-01 is March 1st.
+        const auto t = psp_date_time((p3p3ds::hle::kForkRtcEpochSeconds + 60u * 86400u + 3661u) * 1000000u + 500000u);
+        CHECK(t.year == 2008 && t.month == 3 && t.day == 1 && t.hour == 1 && t.minute == 1 && t.second == 1 && t.microsecond == 500000u);
+    }
+    { const auto t = psp_date_time((p3p3ds::hle::kForkRtcEpochSeconds + 59u * 86400u) * 1000000u); CHECK(t.month == 2 && t.day == 29); }
+    { const auto t = psp_date_time(951782400ull * 1000000u); CHECK(t.year == 2000 && t.month == 2 && t.day == 29); } // 2000-02-29 00:00 UTC
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    constexpr std::uint32_t kOut = 0x08B00000u;
+    rt.memory().store32(kOut + 12u, 0xFFFFFFFFu);
+    rt.cpu().set_gpr(4, kOut);
+    rt.invoke_import("sceRtc", 0xE7C27D1Bu, rt.cpu());
+    CHECK(!rt.stopped());
+    CHECK(rt.cpu().gpr[2] == 0u); // "Normal: 00000000"
+    // At virtual time 0: the fixed epoch 2008-01-01 00:00:00.000000 (checkPspTime: year > 1980, valid date/time).
+    CHECK(rt.memory().load16(kOut) == 2008u && rt.memory().load16(kOut + 2u) == 1u && rt.memory().load16(kOut + 4u) == 1u);
+    CHECK(rt.memory().load16(kOut + 6u) == 0u && rt.memory().load16(kOut + 8u) == 0u && rt.memory().load16(kOut + 10u) == 0u);
+    CHECK(rt.memory().load32(kOut + 12u) == 0u);
+    rt.cpu().set_gpr(4, 0x88000000u); // kernel address from user mode
+    rt.invoke_import("sceRtc", 0xE7C27D1Bu, rt.cpu());
+    CHECK(rt.cpu().gpr[2] == 0x80000023u);
+    rt.cpu().set_gpr(4, 0u);
+    rt.invoke_import("sceRtc", 0xE7C27D1Bu, rt.cpu());
+    CHECK(rt.stopped());
+}
 } // namespace
 
 int main() {
@@ -141,6 +172,7 @@ int main() {
     }
     test_power_register_callback();
     test_ctrl_sampling_cycle();
+    test_rtc_local_time();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }
