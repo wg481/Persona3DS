@@ -14,7 +14,7 @@ ram_mb = "TODO"                   # TODO: measure (PARAM.SFO MEMSIZE)
 # [INFERRED] The EBOOT is a relocatable PRX (ELF type 0xFFA0, readelf -l); the
 # runners load it at the PSP user default. Not measured on hardware.
 load_base = "0x08804000"
-sdk_version = "TODO"              # TODO: $a0 of sceKernelSetCompiledSdkVersion500_550 (runner event log)
+sdk_version = "0x05050010"        # [VERIFIED] $a0 of sceKernelSetCompiledSdkVersion500_550 (module start disassembly)
 # [VERIFIED] ELF e_entry 0x114 (readelf); PC runner "entry=0x08804114" at load_base.
 entry_point = "0x08804114"
 module_name = "pspsys"            # [VERIFIED] psp_analyze module info

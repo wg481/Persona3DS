@@ -1,3 +1,3 @@
 name,address,size
 module_start,0x08804114,cfg
-# user_main,TODO,cfg      TODO: entry of the thread module_start creates
+user_main,0x08804228,cfg

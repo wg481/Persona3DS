@@ -35,15 +35,17 @@ Measured by the maintainer on their own copy (2026-10-11, details in
   PPSSPP's decrypted EBOOT dump. Another decryptor may produce different bytes.
 - `[VERIFIED]` Relocatable PRX (ELF type `0xFFA0`), `e_entry` `0x114`, module
   `pspsys`; runner entry `0x08804114`; `psp_recomp --auto` gives 153 units.
+- `[VERIFIED]` SDK version `0x05050010`, compiler version `0x00030306`
+  (module start disassembly), `user_main` entry `0x08804228` (PC runner).
 - `[INFERRED]` Load base `0x08804000` (the loader's choice for a relocatable
   PRX; not measured on hardware).
 
 Still `TODO` (never filled with guesses):
 
-- `p1p_ulus10432.toml`: `ram_mb`, `sdk_version`.
-- `bootstrap_expectations.hpp`: every checkpoint value except `entry`; the
-  root stack (`0x0A000000`, 64 KiB) is `[INFERRED]` from the PSP memory map.
-- `p1p_functions.csv`: `user_main` is a commented row.
+- `p1p_ulus10432.toml`: `ram_mb`.
+- `bootstrap_expectations.hpp`: the return-site and framebuffer checkpoint
+  values (0); the root stack (`0x0A000000`, 64 KiB) is `[INFERRED]` from the
+  PSP memory map.
 
 ## Preparing the game
 

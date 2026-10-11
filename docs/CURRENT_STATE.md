@@ -2,6 +2,16 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona run 2: past the SDK call, user_main started (2026-10-11)
+
+Maintainer's PC (fresh clone at `f52bb0ff`, Windows, MSYS2 UCRT64), same options as run 1 (`--umd <iso> --run-until-blocker --max-dispatches 1000000`):
+
+- [VERIFIED] Blocker 1 is cleared: `[THREAD CREATE] uid=2 name=user_main entry=0x8804228 priority=32 stack=0x9fb0000-0x9ff0000`, `[THREAD START] uid=2`, `[THREAD EXIT] uid=1 name=root status=0`. New stop: `Missing HLE import scePower::0x04B7766E` (`scePowerRegisterCallback`, uOFW/PSPSDK name) at `0x089812E4`, reached by the `jal` at `0x08804E1C` (word `0x0E2604B9`). Still no interpreter entries, audio, GE or VRAM activity.
+- [VERIFIED] `dump_function profiles/p1p/game/eboot.elf 0x08804114 24`: `lui v0,0x0505` / `ori a0,v0,0x10` then `jal 0x08980F6C` at `0x08804140`, so Persona passes `0x05050010` to `sceKernelSetCompiledSdkVersion500_550` (accepted: upper half `0x0505`). Next, `lui v0,3` and `ori a0,v0,0x306` in the delay slot of `jal 0x08980F84` at `0x0880414C`: `0x00030306` ([INFERRED] the stub is `sceKernelSetCompilerVersion`; the same value P3P passes). Recorded in `bootstrap_expectations.hpp` with `user_main = 0x08804228`.
+- [VERIFIED] Maintainer's ctest 26/27: `p3p_psp_eboot` aborted with `0xc0000409`. Cause, reproduced here: with the profile's reference SHA-256 now set and the ISO next to the build, the test decrypted the `0xD9160BF0` EBOOT and the decryptor's exception was not caught. Fixed in `tests/test_psp_eboot.cpp` (unsupported tag skips the ELF check; other errors still fail). `p3p_mpeg` was skipped on that clone (no `references/`), so its fix is not yet confirmed on Windows.
+
+Immediate blocker: `scePower::0x04B7766E` (`scePowerRegisterCallback`).
+
 ## Persona blocker 1: sceKernelSetCompiledSdkVersion500_550 (2026-10-11)
 
 - Observed (maintainer's run, previous entry): the first import Persona executes is `SysMemUserForUser::0x91DE343C`, a `jal` from `0x08804140` in module start; the run stopped there as a missing HLE import. The `$a0` value it passes has not been recorded yet.
