@@ -429,6 +429,12 @@ void GpuRenderer::blit(C3D_Tex &source, float src_w, float src_h, bool to_screen
     C3D_TexSetFilter(&source, to_screen ? GPU_LINEAR : GPU_NEAREST, to_screen ? GPU_LINEAR : GPU_NEAREST);
     C3D_TexSetWrap(&source, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
     C3D_TexBind(0, &source);
+    // P3P3DS: the GE draws' texture-bind cache (bound_tex_) must forget its texture: `state_valid_ = false`
+    // above is consumed by the next draw, which may be untextured (Persona's movie frames start with two
+    // clear-mode sprites); the following textured draw then saw tex == bound_tex_ and skipped C3D_TexBind,
+    // sampling this render target instead. 3DS draw trace (docs/CURRENT_STATE.md): every movie frame that
+    // reused the previous frame's texture came out black.
+    bound_tex_ = nullptr;
     use_buffer(Layout::Screen);
     C3D_DrawArrays(GPU_TRIANGLES, static_cast<int>(first), 6);
 }
