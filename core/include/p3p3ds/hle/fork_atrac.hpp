@@ -36,6 +36,7 @@ struct IdInfo {
     std::int32_t loopNum{};
     std::uint32_t streamDataByte{}, unk48{}, unk52{}; // unk48/unk52: stream offsets in the first/second buffer
     std::uint32_t buffer{}, secondBuffer{}, bufferByte{}, secondBufferByte{};
+    std::int32_t codecErr{};         // SceAudiocodecCodec.err (sceAtracGetInternalErrorInfo)
 };
 
 // uOFW SceBufferInfo.

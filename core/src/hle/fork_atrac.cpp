@@ -638,7 +638,16 @@ std::int32_t Library::decode_frame(psprecomp::GuestMemory &m, IdInfo &i, std::ui
             *finish = 0u;
             return kErrBufferIsEmpty;
         }
-        // sceAudiocodecDecode: no decoder here, the frame is silence.
+        // sceAudiocodecDecode: no decoder here, the frame is silence. A frame
+        // before the audio data is not a valid frame: [INFERRED] from
+        // resetpos.expected (reset to sample -2048 puts curOff at 0xFFFFFEE8:
+        // 0x80630002, codec_err 0x20x, the frame stays unconsumed).
+        if (static_cast<std::int32_t>(i.curOff) < static_cast<std::int32_t>(i.dataOff)) {
+            i.codecErr = 0x200;
+            *finish = 0u;
+            return static_cast<std::int32_t>(0x80630002u);
+        }
+        i.codecErr = 0;
         i.curOff += i.sampleSize;
         if (i.numFrame == 0) {
             *samples = next;
@@ -784,7 +793,11 @@ std::int32_t Library::get_next_decode_position(int id, std::uint32_t *position) 
     if (!usable(id)) return kErrNoId;
     const auto &i = ids_[id];
     if (const auto ret = is_valid_state(i.state); ret < 0) return ret;
-    if (i.bufferByte - i.curOff < i.sampleSize || i.endSample < i.decodePos) return kErrAllDataDecoded;
+    // [VERIFIED] stream.expected: positions keep being reported while the
+    // streamed file offset is past the buffer size; the bound is the end of
+    // the data. uOFW's decompilation reads bufferByte here [WRONG], the same
+    // field confusion as in sceAtracGetSecondBufferInfo.
+    if (i.dataEnd - i.curOff < i.sampleSize || i.endSample < i.decodePos) return kErrAllDataDecoded;
     *position = i.decodePos - static_cast<std::uint32_t>(i.samplesPerChan);
     return 0;
 }
@@ -870,7 +883,7 @@ std::int32_t Library::get_bitrate(int id, std::uint32_t *bitrate) const {
 std::int32_t Library::get_internal_error_info(int id, std::int32_t *result) const {
     if (!usable(id)) return kErrNoId;
     if (ids_[id].state == 1) return kErrNoData;
-    *result = 0; // codec.err: the placeholder decoder never fails
+    *result = ids_[id].codecErr;
     return 0;
 }
 
