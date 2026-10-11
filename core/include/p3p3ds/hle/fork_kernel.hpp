@@ -225,6 +225,20 @@ struct MemoryStickInfo {
 // so those stop the run and name the call.
 [[nodiscard]] std::string describe_terminate_delete(std::int32_t uid, std::uint32_t status);
 
+// sceUmdUser 0xE83742BA sceUmdDeactivate(mode, drive). Persona (PC run 19,
+// New 3DS run 9) calls it from 0x0881528C after the intro movie with mode 2
+// and the "disc0:" string it gave sceUmdActivate (0x08A65314), then cleans
+// up its UMD callback. Results [VERIFIED] pspautotests umd/api/api.expected
+// (mode 19, -1, NULL drive, kernel pointer -> 0x80010016) and
+// umd/callbacks/umd.expected (mode 1, "disc0:" -> 0, the registered UMD
+// callback is notified again); mode and drive are validated like upstream's
+// UmdState::activate (modes 1/2, exactly "disc0:"). The notification
+// argument 0x12 (MEDIA_IN|READY) is [INFERRED] (the test only shows it is
+// non-zero; see umd.cpp). Gap [INFERRED]: upstream's UmdState cannot clear
+// its activation flag from fork code, so sceUmdGetDriveStat still reports
+// READABLE (0x32) afterwards.
+[[nodiscard]] std::uint32_t umd_deactivate_result(std::uint32_t mode, const std::string &drive) noexcept;
+
 // InterruptManager 0xCA04A2B9 sceKernelRegisterSubIntrHandler(intno, no, handler, arg),
 // 0xFB8E22EC sceKernelEnableSubIntr(intno, no), 0xD61E6961
 // sceKernelReleaseSubIntrHandler(intno, no) (uOFW src/kd/interruptman).

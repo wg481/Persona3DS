@@ -540,6 +540,38 @@ void test_terminate_delete_thread() {
     CHECK(rt.stop_reason().find("sceKernelTerminateDeleteThread(uid " + std::to_string(ready)) != std::string::npos);
     CHECK(tm.get_thread(ready) != nullptr);
 }
+
+// sceUmdDeactivate: pspautotests umd/api and umd/callbacks (hardware), and
+// Persona's call (run 19: mode 2, "disc0:").
+void test_umd_deactivate() {
+    using p3p3ds::hle::umd_deactivate_result;
+    CHECK(umd_deactivate_result(2u, "disc0:") == 0u && umd_deactivate_result(1u, "disc0:") == 0u);
+    CHECK(umd_deactivate_result(19u, "disc0:") == 0x80010016u);
+    CHECK(umd_deactivate_result(0xFFFFFFFFu, "disc0:") == 0x80010016u);
+    CHECK(umd_deactivate_result(2u, "") == 0x80010016u && umd_deactivate_result(1u, "umd0:") == 0x80010016u);
+
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    kernel.threads().init_root_thread("root", 0x08804000u, 0x09FFFF00u, 0u);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kDrive = 0x08A65314u;
+    const char name[] = "disc0:";
+    for (std::uint32_t i = 0; i < sizeof name; ++i) m.store8(kDrive + i, static_cast<std::uint8_t>(name[i]));
+    const auto cb = kernel.threads().create_callback("umdHandler", 0x08900000u, 0x1234u);
+    CHECK(kernel.umd().register_callback(cb, kernel.threads()) == 0u);
+    auto deactivate = [&](std::uint32_t mode, std::uint32_t drive) {
+        rt.cpu().set_gpr(4, mode); rt.cpu().set_gpr(5, drive);
+        rt.invoke_import("sceUmdUser", 0xE83742BAu, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(deactivate(2u, kDrive) == 0u);
+    CHECK(kernel.threads().get_callback(cb)->notify_count == 1); // "umdHandler called" after sceUmdDeactivate
+    CHECK(deactivate(2u, 0u) == 0x80010016u);                     // "Mode 2, NULL"
+    CHECK(deactivate(19u, kDrive) == 0x80010016u);                // "Mode 19"
+    CHECK(kernel.threads().get_callback(cb)->notify_count == 1);
+    CHECK(!rt.stopped());
+}
 } // namespace
 
 int main() {
@@ -584,6 +616,7 @@ int main() {
     test_mpeg_decode_ycbcr();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();
+    test_umd_deactivate();
     std::cout << "fork kernel checks failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

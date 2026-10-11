@@ -143,6 +143,10 @@ std::string describe_terminate_delete(std::int32_t uid, std::uint32_t status) {
            ") on a live thread is not modelled yet";
 }
 
+std::uint32_t umd_deactivate_result(std::uint32_t mode, const std::string &drive) noexcept {
+    return (mode == 1u || mode == 2u) && drive == "disc0:" ? 0u : 0x80010016u;
+}
+
 namespace {
 VblankSubInterrupts g_vblank_subintr;
 KernelState *g_fork_kernel = nullptr;
@@ -372,6 +376,21 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             return;
         }
         ctx.set_gpr(2, static_cast<std::uint32_t>(tm.delete_thread(uid)));
+    });
+
+    // sceUmdUser::0xE83742BA - sceUmdDeactivate
+    runtime.register_hle("sceUmdUser", 0xE83742BAu, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &m = rt.memory();
+        const std::uint32_t mode = ctx.gpr[4], drive_ptr = ctx.gpr[5];
+        std::string drive;
+        if (drive_ptr != 0u && m.contains(drive_ptr, 7u)) {
+            try { drive = m.read_c_string(drive_ptr, 7u); } catch (const psprecomp::Error &) { drive.clear(); }
+        }
+        const std::uint32_t result = umd_deactivate_result(mode, drive);
+        ctx.set_gpr(2, result);
+        rt.event("umd_deactivate", {{"mode", mode}, {"drive_ptr", drive_ptr}, {"result", result}});
+        if (result == 0u && kernel.umd().registered_callback() != 0)
+            (void)kernel.threads().notify_callback(rt, kernel.umd().registered_callback(), 0x12u);
     });
 
     // sceRtc::0x6FF40ACC - sceRtcGetTick
