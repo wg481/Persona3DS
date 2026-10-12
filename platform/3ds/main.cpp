@@ -22,6 +22,8 @@
 // An empty sdmc:/persona3ds/play_movies.txt turns this off.
 // Short slowdowns: an empty sdmc:/persona3ds/profile_seconds.txt writes the time
 // split of every second to sdmc:/persona3ds/profile_seconds.csv.
+// Renderer trace: an empty sdmc:/persona3ds/gpu_trace.txt writes the first 1,200
+// presents and their screen-space draws to sdmc:/persona3ds/gpu_trace.log.
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/input.hpp"
 #include "p3p3ds/interpreter.hpp"
@@ -43,6 +45,7 @@
 #include <3ds.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <deque>
 #include <cstdlib>
@@ -195,6 +198,8 @@ std::deque<TimeSample> g_samples;
 // sdmc:/persona3ds/profile_seconds.txt present: one CSV line per second with the
 // split of that second, to find short slowdowns the 10 s report averages out.
 FILE *g_seconds_log = nullptr;
+// Longest rewrite of report.txt so far (shown as `sd max`).
+std::atomic<std::uint32_t> g_report_write_max_ms{};
 
 // 3DS buttons -> PSP buttons by position (PSP: Cross bottom, Circle right,
 // Square left, Triangle top).
@@ -620,7 +625,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "frames : %llu   vblank: %llu\n"
         "input  : %08lx\n"
         "app mem free: %lu KiB / %lu KiB\n"
-        "linear free : %lu KiB\n"
+        "linear free : %lu KiB  sd max %lu ms\n"
         "cores  : %s\n"
         "iso    : %s\n"
         "audio  : %s\n"
@@ -636,7 +641,8 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         static_cast<unsigned long>(s.buttons),
         static_cast<unsigned long>(osGetMemRegionFree(MEMREGION_APPLICATION) / 1024u),
         static_cast<unsigned long>(osGetMemRegionSize(MEMREGION_APPLICATION) / 1024u),
-        static_cast<unsigned long>(linearSpaceFree() / 1024u), s.cores.c_str(), s.iso.c_str(),
+        static_cast<unsigned long>(linearSpaceFree() / 1024u),
+        static_cast<unsigned long>(g_report_write_max_ms.load(std::memory_order_relaxed)), s.cores.c_str(), s.iso.c_str(),
         g_ndsp != nullptr ? g_ndsp->status().c_str() : "-",
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().entries),
         static_cast<unsigned long>(p3p3ds::hle::media::fork_media().stats().matched),
@@ -661,10 +667,72 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
 }
 
 void write_report(const std::string &text) {
+    const u64 start = osGetTime();
     if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/report.txt", "w")) {
         std::fputs(text.c_str(), f);
         std::fclose(f);
     }
+    const auto ms = static_cast<std::uint32_t>(osGetTime() - start);
+    if (ms > g_report_write_max_ms.load(std::memory_order_relaxed)) g_report_write_max_ms.store(ms, std::memory_order_relaxed);
+}
+
+// The periodic report.txt is written by a thread of its own on core 0 below
+// the game's priority: on a slow SD card one rewrite took about 3 s (user
+// report, 0.3.0: `ui` 60 % of the time, 36 % speed) and the game stood still
+// for it every 5 s. The writer's file-system request blocks only the writer.
+struct ReportWriter {
+    LightLock lock;
+    LightEvent wake;
+    std::string pending;
+    bool has_pending{}, quit{};
+    Thread thread{};
+};
+ReportWriter g_report_writer;
+
+void report_writer_main(void *) {
+    auto &w = g_report_writer;
+    for (;;) {
+        LightEvent_Wait(&w.wake);
+        LightLock_Lock(&w.lock);
+        const bool quit = w.quit;
+        std::string text;
+        if (w.has_pending) { text.swap(w.pending); w.has_pending = false; }
+        LightLock_Unlock(&w.lock);
+        if (!text.empty()) write_report(text);
+        if (quit) return;
+    }
+}
+
+void start_report_writer() {
+    auto &w = g_report_writer;
+    LightLock_Init(&w.lock);
+    LightEvent_Init(&w.wake, RESET_ONESHOT);
+    s32 priority = 0x30;
+    svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+    w.thread = threadCreate(report_writer_main, nullptr, 16u << 10, std::min<s32>(priority + 1, 0x3F), 0, false);
+}
+
+// Without the thread (creation failed) the report is written here, as before.
+void post_report(const std::string &text) {
+    auto &w = g_report_writer;
+    if (w.thread == nullptr) { write_report(text); return; }
+    LightLock_Lock(&w.lock);
+    w.pending = text; // a newer report replaces one not yet written
+    w.has_pending = true;
+    LightLock_Unlock(&w.lock);
+    LightEvent_Signal(&w.wake);
+}
+
+void stop_report_writer() {
+    auto &w = g_report_writer;
+    if (w.thread == nullptr) return;
+    LightLock_Lock(&w.lock);
+    w.quit = true;
+    LightLock_Unlock(&w.lock);
+    LightEvent_Signal(&w.wake);
+    threadJoin(w.thread, U64_MAX);
+    threadFree(w.thread);
+    w.thread = nullptr;
 }
 
 // The bottom-screen report is overwritten in place: every one of the 30 rows
@@ -820,6 +888,12 @@ int main() {
         stage = "init gpu";
         auto gpu = std::make_unique<p3p3ds::n3ds::GpuRenderer>();
         g_gpu = gpu.get();
+        // sdmc:/persona3ds/gpu_trace.txt present: presents and screen-space draws of the
+        // first 1,200 presents (about 20 s) to sdmc:/persona3ds/gpu_trace.log.
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/gpu_trace.txt", "r")) {
+            std::fclose(f);
+            gpu->set_trace(std::fopen(P3P_PROFILE_SD_BASE "/gpu_trace.log", "w"), 1200u);
+        }
         // GE back end on core 2 when the probe found a parallel core 2;
         // sdmc:/persona3ds/no_gpu_thread.txt keeps it on the game's thread (A/B runs).
         bool gpu_thread = stats.cores.rfind("core2 ok", 0) == 0;
@@ -981,13 +1055,14 @@ int main() {
                     const u64 ui_start = svcGetSystemTick();
                     const std::string text = report_text(stats, rt, kernel);
                     if (!save_menu.active) show(text);
-                    write_report(text);
+                    post_report(text);
                     stats.last_report_ms = now;
                     stats.ui_ticks += svcGetSystemTick() - ui_start;
                 }
             }
         };
         stage = "run";
+        start_report_writer();
         std::printf("Starting game...\n");
         try { rt.run(entry, ~0ull); }
         catch (const psprecomp::FrontierHalt &) {}
@@ -999,6 +1074,7 @@ int main() {
     if (g_async != nullptr) g_async->drain(); // the exit screen runs aptMainLoop: citro3d idle
     stats.status = "stopped";
     if (g_seconds_log) { std::fclose(g_seconds_log); g_seconds_log = nullptr; }
+    stop_report_writer(); // the final report below is written here, after any pending one
     const auto text = report_text(stats, rt, kernel) + "stage  : " + stage + "\n" + mem_line();
     write_report(text);
     show(text);
