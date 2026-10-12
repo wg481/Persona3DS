@@ -1140,7 +1140,10 @@ int main() {
                     svcSleepThread(static_cast<s64>(ahead_us * 1000.0));
                     stats.idle_ticks += svcGetSystemTick() - sleep_start;
                 }
-                else if (ahead_us < -50000.0) wall_minus_guest_us = wall_us - guest_us; // behind: do not race later
+                // Persona3DS: behind by more than one vblank: continue from here instead of racing to catch
+                // up (was 50 ms). Catch-up bursts ran the game above real time (report speed over 100 %),
+                // delivered frames unevenly and pushed the virtual clock ahead of the sound.
+                else if (ahead_us < -16683.0) wall_minus_guest_us = wall_us - guest_us;
             }
             const u64 present_start = svcGetSystemTick();
             gpu_present(rt.memory(), fb);

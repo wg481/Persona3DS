@@ -33,8 +33,7 @@ public:
     // Persona3DS: blocks are final by the virtual clock (pump). Earlier rule: final once data had
     // arrived kLeadFrames past the block; 2048 dropped a third of the PCM as late, 8192 (186 ms) none,
     // but with up to kBuffers queued the sound lagged the picture by up to about 370 ms (maintainer:
-    // "audio a little desynchronized"). kLeadFrames now only sizes the skip in add().
-    static constexpr std::uint32_t kLeadFrames = 8192u;
+    // "audio a little desynchronized").
     static constexpr std::uint32_t kMaxQueued = 4u;            // blocks in the DSP queue (93 ms)
     static constexpr std::uint32_t kMaxBehind = 8u * kBlock;   // cursor more than 186 ms behind the clock: skip
     static constexpr std::uint32_t kRingFrames = 1u << 16; // 1.49 s
@@ -75,19 +74,14 @@ public:
         const std::uint64_t start = start_us * kRate / 1000000u, frames = stereo.size() / 2u;
         if (!started_) { play_ = start; started_ = true; }
         if (start + frames > newest_) newest_ = start + frames;
-        if (newest_ > play_ + kRingFrames / 2u) { // more than ~0.7 s behind: skip forward
-            const std::uint64_t to = newest_ - kLeadFrames - kBlock;
-            for (std::uint64_t f = play_; f < to && f < play_ + kRingFrames; ++f) {
-                const std::size_t i = static_cast<std::size_t>(f % kRingFrames) * 2u;
-                ring_[i] = ring_[i + 1u] = 0;
-            }
-            skipped_ += to - play_;
-            play_ = to;
-        }
+        // Persona3DS: falling behind the clock is handled in pump(). Here only data that would not fit
+        // the ring (more than kRingFrames past the cursor) is dropped, counted as overflow: the earlier
+        // rule (skip when the newest buffer is 0.7 s past the cursor) also fired for one large buffer
+        // submitted ahead and threw away sound not yet played.
         for (std::uint64_t f = 0; f < frames; ++f) {
             const std::uint64_t at = start + f;
             if (at < play_) { ++late_; continue; }
-            if (at >= play_ + kRingFrames) { ++late_; continue; }
+            if (at >= play_ + kRingFrames) { ++overflow_; continue; }
             const std::size_t i = static_cast<std::size_t>(at % kRingFrames) * 2u;
             ring_[i] += stereo[2u * f];
             ring_[i + 1u] += stereo[2u * f + 1u];
@@ -140,8 +134,9 @@ public:
         if (!ready_)
             std::snprintf(text, sizeof text, "ndsp init %08lx (needs sdmc:/3ds/dspfirm.cdc)", static_cast<unsigned long>(init_));
         else
-            std::snprintf(text, sizeof text, "ndsp ok, %lu blocks, %llu late, %llu skipped, %lu gaps", static_cast<unsigned long>(queued_),
-                          static_cast<unsigned long long>(late_), static_cast<unsigned long long>(skipped_), static_cast<unsigned long>(gaps_));
+            std::snprintf(text, sizeof text, "ndsp ok, %lu blocks, %llu late, %llu skipped, %llu overflow, %lu gaps", static_cast<unsigned long>(queued_),
+                          static_cast<unsigned long long>(late_), static_cast<unsigned long long>(skipped_),
+                          static_cast<unsigned long long>(overflow_), static_cast<unsigned long>(gaps_));
         return text;
     }
 
@@ -152,7 +147,7 @@ private:
     std::int16_t *pcm_{};
     ndspWaveBuf wave_[kBuffers];
     std::vector<std::int32_t> ring_;
-    std::uint64_t play_{}, newest_{}, late_{}, skipped_{};
+    std::uint64_t play_{}, newest_{}, late_{}, skipped_{}, overflow_{};
     std::uint32_t next_{}, queued_{}, gaps_{};
 };
 
