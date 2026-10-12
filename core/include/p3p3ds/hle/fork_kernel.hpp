@@ -306,6 +306,9 @@ struct GeStallTiming {
     // batch reached its cap, another import was called, another list was updated,
     // or the update could not be deferred (unknown/completed list, unaligned).
     std::uint64_t flushes{}, by_cap{}, by_import{}, by_list{}, direct{};
+    // Timing (units) and the opcode census (opcodes, scanned) only when set: each costs timer reads
+    // (kernel calls on the New 3DS) or a scan per update. Calls and flushes are always counted.
+    bool detail{};
 };
 
 // Persona3DS: sceGeListUpdateStallAddr batching. With max_updates > 0, a valid

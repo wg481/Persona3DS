@@ -6,11 +6,14 @@
 //
 // The kernel's PCM sink (hle/audio.hpp) hands every accepted buffer with its
 // start on the virtual clock. Buffers are mixed into a ring indexed by virtual
-// sample number; once a block is complete (data has arrived kLeadFrames past
-// it, so every channel had its turn) it is copied to an NDSP wave buffer. The
-// play cursor only advances when data is there: when the game runs slower than
-// real time the sound has gaps instead of drifting, and it skips forward when
-// it falls more than half a second behind. Needs sdmc:/3ds/dspfirm.cdc (DSP
+// sample number; once the virtual clock has passed a block's end it is final
+// and copied to an NDSP wave buffer: a channel's buffer starts at or after the
+// virtual time it is submitted (core/src/hle/audio.cpp AudioState::output:
+// start = max(now, play_end)), so no data can still arrive for it. At most
+// kMaxQueued blocks wait in the DSP queue. The play cursor only advances when
+// the clock does: when the game runs slower than real time the sound has gaps
+// instead of drifting, and when the cursor falls more than kMaxBehind behind
+// the clock it skips forward (sound in step with the picture). Needs sdmc:/3ds/dspfirm.cdc (DSP
 // firmware dumped by the user, as for every homebrew with sound).
 #include <3ds.h>
 
@@ -27,10 +30,13 @@ public:
     static constexpr std::uint32_t kRate = 44100u;
     static constexpr std::uint32_t kBlock = 1024u;      // frames per NDSP wave buffer (23 ms)
     static constexpr std::uint32_t kBuffers = 8u;       // 186 ms queued at most
-    // Wait this long for other channels' buffers before a block is final. 2048 (46 ms) dropped a third
-    // of the PCM as late on hardware (report: 795,999 late of 2,285,568 played): [INFERRED] channels
-    // queue up to one large buffer ahead, so 8192 (186 ms latency) [UNVERIFIED].
+    // Persona3DS: blocks are final by the virtual clock (pump). Earlier rule: final once data had
+    // arrived kLeadFrames past the block; 2048 dropped a third of the PCM as late, 8192 (186 ms) none,
+    // but with up to kBuffers queued the sound lagged the picture by up to about 370 ms (maintainer:
+    // "audio a little desynchronized"). kLeadFrames now only sizes the skip in add().
     static constexpr std::uint32_t kLeadFrames = 8192u;
+    static constexpr std::uint32_t kMaxQueued = 4u;            // blocks in the DSP queue (93 ms)
+    static constexpr std::uint32_t kMaxBehind = 8u * kBlock;   // cursor more than 186 ms behind the clock: skip
     static constexpr std::uint32_t kRingFrames = 1u << 16; // 1.49 s
 
     NdspOutput() {
@@ -88,11 +94,28 @@ public:
         }
     }
 
-    // Once per vblank on the main thread: queue every complete block.
-    void pump() {
-        if (!ready_) return;
+    // Once per vblank on the main thread, with the virtual clock: queue every block the clock has
+    // passed, up to kMaxQueued in the DSP queue.
+    void pump(std::uint64_t now_us) {
+        if (!ready_ || !started_) return;
+        const std::uint64_t now = now_us * kRate / 1000000u;
+        if (now > play_ + kMaxBehind) { // far behind the picture (slow stretch, stalls): jump to it
+            const std::uint64_t to = now - kBlock;
+            for (std::uint64_t f = play_; f < to && f < play_ + kRingFrames; ++f) {
+                const std::size_t i = static_cast<std::size_t>(f % kRingFrames) * 2u;
+                ring_[i] = ring_[i + 1u] = 0;
+            }
+            skipped_ += to - play_;
+            play_ = to;
+        }
+        std::uint32_t in_flight = 0;
+        for (const auto &b : wave_) in_flight += b.status == NDSP_WBUF_QUEUED || b.status == NDSP_WBUF_PLAYING ? 1u : 0u;
+        // An empty queue (start, or after a gap) refills only once two blocks are final: a one-block
+        // cushion against the vblank (16.7 ms) and block (23.2 ms) rhythms meeting badly.
+        if (in_flight == 0u && play_ + 2u * kBlock > now) return;
         for (std::uint32_t n = 0; n < kBuffers; ++n) {
-            if (!started_ || newest_ < play_ + kBlock + kLeadFrames) return; // not enough data yet
+            if (play_ + kBlock > now) return;            // the block is not over on the virtual clock yet
+            if (in_flight >= kMaxQueued) return;         // enough queued
             ndspWaveBuf &w = wave_[next_];
             if (w.status != NDSP_WBUF_FREE && w.status != NDSP_WBUF_DONE) return; // all queued
             if (queued_ != 0u && !ndspChnIsPlaying(0)) ++gaps_;
@@ -107,6 +130,7 @@ public:
             ndspChnWaveBufAdd(0, &w);
             play_ += kBlock;
             ++queued_;
+            ++in_flight;
             next_ = (next_ + 1u) % kBuffers;
         }
     }

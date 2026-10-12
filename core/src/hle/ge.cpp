@@ -341,7 +341,7 @@ void GeManager::pump(psprecomp::Runtime &rt) {
             }
             { // P3P3DS: every 16th command timed per opcode (HostProfile::ge_op_units)
                 auto &hp=host_profile();
-                if(hp.enabled && (++hp.ge_op_sample&15u)==0u) {
+                if(hp.ge_detail && hp.enabled && (++hp.ge_op_sample&15u)==0u) {
                     const auto t0=profile_now(hp);
                     execute(rt,l,word);
                     hp.ge_op_units[op]+=(profile_now(hp)-t0)<<4;

@@ -24,6 +24,7 @@ struct HostProfile {
     // units scaled by 16), to find what the dungeon's 44 us per stall update is spent on.
     std::array<std::uint64_t, 256> ge_op_units{};
     std::uint32_t ge_op_sample{};
+    bool ge_detail{}; // P3P3DS: the sampling above runs only when set (3DS: sdmc:/persona3ds/ge_profile.txt)
     // Guest time between a list enqueue and the game's next wait for the GE
     // (sceGeDrawSync / sceGeListSync mode 0): what a GE back end on another
     // core could overlap. And the GE finish callbacks' own guest code.

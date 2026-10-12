@@ -489,6 +489,7 @@ void test_ge_stall_timing() {
     p3p3ds::KernelState kernel;
     p3p3ds::hle::register_all_hle_modules(rt, kernel);
     auto &m = rt.memory();
+    p3p3ds::hle::ge_stall_timing().detail = true; // timing and opcode census on (ge_profile.txt on the 3DS)
     const auto before = p3p3ds::hle::ge_stall_timing().calls;
     const auto stall = [&](std::uint32_t id, std::uint32_t address) {
         rt.cpu().set_gpr(4, id); rt.cpu().set_gpr(5, address); rt.cpu().set_gpr(2, 0xDEADBEEFu);
@@ -513,6 +514,11 @@ void test_ge_stall_timing() {
     const auto &timing = p3p3ds::hle::ge_stall_timing();
     CHECK(timing.opcodes[0x00] >= 1u && timing.opcodes[0x0F] >= 1u && timing.opcodes[0x0C] >= 1u);
     CHECK(p3p3ds::hle::ge_stall_top_opcodes(3).find("0F:") != std::string::npos);
+    // Without detail: calls still counted, no timing, no census.
+    p3p3ds::hle::ge_stall_timing().detail = false;
+    const auto units = timing.units, scanned = timing.scanned, calls = timing.calls;
+    CHECK(stall(id, kList + 12u) != 0xDEADBEEFu);
+    CHECK(timing.calls == calls + 1u && timing.units == units && timing.scanned == scanned);
 }
 
 // sceGeListUpdateStallAddr batching (set_ge_stall_batching): a deferred update leaves the

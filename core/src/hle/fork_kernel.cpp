@@ -327,11 +327,13 @@ GeStallBatch g_ge_batch;
 
 // upstream's update_stall, timed into ge_stall_timing().units
 std::int32_t run_stall_update(psprecomp::Runtime &rt, int id, std::uint32_t stall) {
+    auto &t = ge_stall_timing();
+    ++t.flushes;
+    if (!t.detail) return g_fork_kernel->ge().update_stall(rt, id, stall);
     auto &p = host_profile();
     const std::uint64_t start = profile_now(p);
     const std::int32_t result = g_fork_kernel->ge().update_stall(rt, id, stall);
-    ge_stall_timing().units += profile_now(p) - start;
-    ++ge_stall_timing().flushes;
+    t.units += profile_now(p) - start;
     return result;
 }
 
@@ -383,7 +385,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         const std::uint32_t stall = ctx.gpr[5];
         const auto *list = kernel.ge().find(id);
         ++t.calls;
-        if (list != nullptr) { // released words, before running them (from the pending stall when one is recorded)
+        if (t.detail && list != nullptr) { // released words, before running them (from the pending stall when one is recorded)
             auto &m = rt.memory();
             const std::uint32_t to = stall & 0x0FFFFFFCu;
             const std::uint32_t from = b.pending && b.id == id && (b.stall & 0x0FFFFFFCu) > list->pc ? b.stall & 0x0FFFFFFCu : list->pc;
