@@ -481,6 +481,35 @@ void test_mpeg_decode_ycbcr() {
     CHECK(rt.stop_reason().find("sceMpegAvcDecodeYCbCr(mpeg 0x08CC268C") != std::string::npos);
 }
 
+// sceGeListUpdateStallAddr through the fork's timed registration: the same
+// results as upstream's GeManager::update_stall, and every call counted.
+void test_ge_stall_timing() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    const auto before = p3p3ds::hle::ge_stall_timing().calls;
+    const auto stall = [&](std::uint32_t id, std::uint32_t address) {
+        rt.cpu().set_gpr(4, id); rt.cpu().set_gpr(5, address); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    CHECK(stall(77u, 0x08A00000u) == static_cast<std::uint32_t>(kernel.ge().update_stall(rt, 77, 0x08A00000u))); // unknown list
+    // A list stalled at its start, then released up to an END after one NOP.
+    constexpr std::uint32_t kList = 0x08A10000u;
+    m.store32(kList, 0x00000000u);        // NOP
+    m.store32(kList + 4u, 0x0F000000u);   // FINISH
+    m.store32(kList + 8u, 0x0C000000u);   // END
+    rt.cpu().set_gpr(4, kList); rt.cpu().set_gpr(5, kList); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u); // no callback
+    rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu()); // sceGeListEnQueue
+    const auto id = rt.cpu().gpr[2];
+    CHECK(static_cast<std::int32_t>(id) >= 0);
+    CHECK(stall(id, kList + 2u) == static_cast<std::uint32_t>(kernel.ge().update_stall(rt, static_cast<int>(id), kList + 2u))); // unaligned
+    CHECK(stall(id, kList + 12u) == 0u);
+    CHECK(!rt.stopped());
+    CHECK(p3p3ds::hle::ge_stall_timing().calls == before + 3u);
+}
+
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
 // 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
 void test_mpeg_avc_csc() {
@@ -955,6 +984,7 @@ int main() {
     test_mpeg_ycbcr_init();
     test_refer_event_flag();
     test_mpeg_decode_ycbcr();
+    test_ge_stall_timing();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();
     test_umd_deactivate();

@@ -6,6 +6,7 @@
 
 #include "p3p3ds/hle/mpeg.hpp"
 #include "p3p3ds/kernel_state.hpp"
+#include "p3p3ds/profile.hpp"
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/elf32.hpp"
@@ -308,8 +309,23 @@ bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexCo
     return true;
 }
 
+GeStallTiming &ge_stall_timing() noexcept {
+    static GeStallTiming timing;
+    return timing;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
+    // sceGe_user::0xE0D68148 sceGeListUpdateStallAddr: upstream's GeManager::update_stall, timed
+    // (ge_stall_timing). Replaces core/src/hle/ge.cpp's registration (fork imports register last).
+    runtime.register_hle("sceGe_user", 0xE0D68148u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &p = host_profile();
+        const std::uint64_t start = profile_now(p);
+        ctx.set_gpr(2, static_cast<std::uint32_t>(kernel.ge().update_stall(rt, static_cast<int>(ctx.gpr[4]), ctx.gpr[5])));
+        auto &t = ge_stall_timing();
+        t.units += profile_now(p) - start;
+        ++t.calls;
+    });
     g_vblank_subintr = VblankSubInterrupts{};
     g_module_stop_threads.clear();
     g_msgdialog = MsgDialogState{};

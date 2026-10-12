@@ -290,6 +290,15 @@ inline constexpr std::uint64_t kUmdMinWaitUs = 250u;
 // 730-740 us), then 0 until the next start; the frame is 16,680-16,690 us.
 // Upstream's virtual clock starts each vblank at a multiple of
 // ThreadManager::kVblankPeriodUs, so: (now % period) < kVblankLengthUs.
+// Persona3DS profiling: time spent inside sceGeListUpdateStallAddr's GE work
+// (GeManager::update_stall: running the newly appended display-list commands),
+// in host_profile().clock units, without the HLE call's own entry/exit cost.
+// The first dungeon calls it about 10,500 times a second.
+struct GeStallTiming {
+    std::uint64_t calls{}, units{};
+};
+[[nodiscard]] GeStallTiming &ge_stall_timing() noexcept;
+
 inline constexpr std::uint64_t kVblankLengthUs = 732u;
 [[nodiscard]] constexpr std::uint32_t display_is_vblank(std::uint64_t now_us, std::uint64_t period_us) noexcept {
     return now_us % period_us < kVblankLengthUs ? 1u : 0u;

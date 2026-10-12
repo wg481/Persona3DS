@@ -25,6 +25,7 @@
 // Renderer trace: an empty sdmc:/persona3ds/gpu_trace.txt writes the first 1,200
 // presents and their screen-space draws to sdmc:/persona3ds/gpu_trace.log.
 #include "p3p3ds/hle/hle_modules.hpp"
+#include "p3p3ds/hle/fork_kernel.hpp" // Persona3DS: ge_stall_timing
 #include "p3p3ds/input.hpp"
 #include "p3p3ds/interpreter.hpp"
 #include "p3p3ds/kernel_state.hpp"
@@ -191,6 +192,7 @@ struct TimeSample {
     u64 fill{};                                // model vertices into the arena (part of vertex)
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
     double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
+    double stall_calls{}, stall_ticks{};                  // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall
     double vc_hits{}, vc_uses{};               // vertex cache hits / model draws that asked it
     double guest_us{}, hle_ns{}, render_ns{}, io_ns{}, io_bytes{}, hle_calls{};
     std::uint64_t vblanks{}, game_frames{};
@@ -496,6 +498,8 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
     t.io_ns = static_cast<double>(p3p3ds::host_profile().io_ns) * kNsPerTick;
     t.io_bytes = static_cast<double>(p3p3ds::host_profile().io_bytes);
     t.ge_cmds = static_cast<double>(p3p3ds::host_profile().ge_commands);
+    t.stall_calls = static_cast<double>(p3p3ds::hle::ge_stall_timing().calls);
+    t.stall_ticks = static_cast<double>(p3p3ds::hle::ge_stall_timing().units);
     t.vblanks = s.frames;
     t.game_frames = s.game_frames;
     return t;
@@ -562,6 +566,12 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         std::snprintf(buf, sizeof buf, " ge in: cmd %.1fk draw %.1fk st %.1fk clut %.1fk /s\n", (b.ge_cmds - a.ge_cmds) / s.wall / 1000.0,
                       (b.ge_draws - a.ge_draws) / s.wall / 1000.0, (b.ge_states - a.ge_states) / s.wall / 1000.0,
                       (b.ge_cluts - a.ge_cluts) / s.wall / 1000.0);
+        text += buf;
+        // Persona3DS: sceGeListUpdateStallAddr: calls per second and the time per call spent in the GE
+        // work itself (update_stall); the per-import time in profile_seconds.csv also holds the call's cost.
+        const double stalls = b.stall_calls - a.stall_calls;
+        std::snprintf(buf, sizeof buf, " stall: %.1fk/s, GE work %.1f us per call\n", stalls / s.wall / 1000.0,
+                      stalls > 0 ? (b.stall_ticks - a.stall_ticks) * kNsPerTick / 1000.0 / stalls : 0.0);
         text += buf;
     }
     return text;
