@@ -4,14 +4,24 @@
 #include "p3p3ds/hle/fork_media.hpp"
 #include "psprecomp/guest_memory.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 
 namespace p3p3ds::hle::media {
 namespace {
 
 VideoDecoderFactory g_factory;
 Movies g_movies;
+
+struct PictureWrite {
+    std::uint32_t address{}, stride{};
+    std::uint64_t generation{}; // 0: free slot
+};
+std::mutex g_writes_lock;
+std::array<PictureWrite, 4> g_writes{}; // Persona double-buffers its movie texture: 2 addresses
+std::uint64_t g_last_generation = 0;
 constexpr std::uint32_t kPsmfPrefixMax = 0x800u; // the PSMF header the game reads before the stream
 
 std::uint32_t le32(const std::uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | static_cast<std::uint32_t>(p[3]) << 24; }
@@ -41,6 +51,7 @@ std::shared_ptr<MovieTrack> MovieTrack::open(const std::string &dir, const std::
     if (!ok || t->aus_.empty() || t->width_ == 0u || t->height_ == 0u || t->width_ > 1024u || t->height_ > 1024u) return nullptr;
     t->file_ = std::fopen((dir + "/" + video).c_str(), "rb");
     if (t->file_ == nullptr) return nullptr;
+    std::setvbuf(t->file_, nullptr, _IONBF, 0); // read_unit does its own read-ahead
     if (!audio.empty() && audio != "-") t->audio_ = ImaTrack::open(dir + "/" + audio);
     t->rgba_.assign(static_cast<std::size_t>(t->width_) * t->height_, 0xFF000000u);
     if (g_factory) t->decoder_ = g_factory(t->width_, t->height_);
@@ -51,12 +62,30 @@ MovieTrack::~MovieTrack() {
     if (file_ != nullptr) std::fclose(file_);
 }
 
+// The bytes of one access unit: from the read-ahead chunk, refilled from `offset` when the unit is not
+// inside it (one SD read per kReadChunk of stream instead of a seek and read per picture); a unit
+// larger than the chunk is read on its own.
+const std::uint8_t *MovieTrack::read_unit(std::uint32_t offset, std::uint32_t size) {
+    if (offset >= chunk_offset_ && offset + static_cast<std::uint64_t>(size) <= chunk_offset_ + chunk_.size())
+        return chunk_.data() + (offset - chunk_offset_);
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<std::uint8_t> &dst = size > kReadChunk ? au_ : chunk_;
+    dst.resize(size > kReadChunk ? size : kReadChunk);
+    std::size_t got = 0;
+    if (std::fseek(file_, static_cast<long>(offset), SEEK_SET) == 0) got = std::fread(dst.data(), 1, dst.size(), file_);
+    read_us_ += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+    dst.resize(got);
+    if (&dst == &chunk_) chunk_offset_ = offset;
+    return got >= size ? dst.data() : nullptr;
+}
+
 bool MovieTrack::decode_next() {
     if (next_ >= aus_.size()) return false;
     const auto [offset, size] = aus_[next_++];
-    au_.resize(size);
-    if (std::fseek(file_, static_cast<long>(offset), SEEK_SET) != 0 || std::fread(au_.data(), 1, size, file_) != size) return false;
-    if (!decoder_->decode(au_.data(), size, rgba_.data(), width_, height_)) return false;
+    const std::uint8_t *au = read_unit(offset, size);
+    if (au == nullptr) return false;
+    ++units_;
+    if (!decoder_->decode(au, size, rgba_.data(), width_, height_)) return false;
     ++pictures_;
     return true;
 }
@@ -78,6 +107,7 @@ std::shared_ptr<MovieTrack> Movies::bind(psprecomp::GuestMemory &m, std::uint32_
     // [INFERRED] one movie at a time: a new stream ends the previous ones (and frees their decoder,
     // the 3DS hardware decoder being a single session).
     playing_.clear();
+    forget_picture_writes();
     if (entries_.empty()) return nullptr;
     for (const auto &e : entries_) {
         if (e.prefix > kPsmfPrefixMax) continue;
@@ -103,7 +133,10 @@ const std::uint32_t *Movies::current_picture(std::uint32_t handle, std::uint32_t
     auto it = playing_.find(handle);
     if (it == playing_.end() || it->second.pictures == 0u) return nullptr;
     const auto start = std::chrono::steady_clock::now();
+    const std::uint64_t units = it->second.track->units_decoded(), read_us = it->second.track->read_us();
     const auto *p = it->second.track->picture(it->second.pictures - 1u);
+    stats_.units += it->second.track->units_decoded() - units;
+    stats_.read_us += it->second.track->read_us() - read_us;
     stats_.decode_us += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
     if (const auto *d = it->second.track->decoder()) decoder_status_ = d->status();
@@ -123,5 +156,30 @@ bool Movies::next_audio(std::uint32_t handle, std::int16_t *out) {
 }
 
 Movies &fork_movies() noexcept { return g_movies; }
+
+void note_picture_write(std::uint32_t address, std::uint32_t stride) {
+    address = psprecomp::GuestMemory::canonical(address);
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    PictureWrite *slot = nullptr;
+    for (auto &w : g_writes)
+        if (w.generation != 0u && w.address == address) { slot = &w; break; }
+    if (slot == nullptr) // a free slot, else the least recently written
+        for (auto &w : g_writes)
+            if (slot == nullptr || w.generation < slot->generation) slot = &w;
+    *slot = {address, stride, ++g_last_generation};
+}
+
+bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation) {
+    address = psprecomp::GuestMemory::canonical(address);
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    for (const auto &w : g_writes)
+        if (w.generation != 0u && w.address == address && w.stride == stride) { generation = w.generation; return true; }
+    return false;
+}
+
+void forget_picture_writes() {
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    g_writes = {};
+}
 
 } // namespace p3p3ds::hle::media

@@ -97,6 +97,37 @@ void test_ima() {
     check(media::ImaTrack::open((kTmp / "missing.wav").string()) == nullptr, "missing file: null");
 }
 
+// Read-ahead of a long IMA file: 6,000 stereo blocks of 24 bytes (144,000 bytes of data, three read
+// chunks); every frame of block b >= 1 is (1000 * (b + 1), -1000 * (b + 1)) as int16 (ima_wav).
+void test_ima_read_ahead() {
+    constexpr std::uint32_t kBlocks = 6000, kPer = 17;
+    write(kTmp / "long_ima.wav", ima_wav(2, kBlocks, kBlocks * kPer));
+    auto t = media::ImaTrack::open((kTmp / "long_ima.wav").string());
+    check(t != nullptr && t->samples() == kBlocks * kPer, "long IMA file opens");
+    if (t == nullptr) return;
+    const auto expect = [](std::uint64_t frame, int side) {
+        const auto b = static_cast<int>(frame / kPer);
+        return static_cast<std::int16_t>(side * 1000 * (b + 1));
+    };
+    std::vector<std::int16_t> out(2 * 2048);
+    std::uint64_t wrong = 0;
+    for (std::uint64_t pos = kPer; pos < kBlocks * kPer; pos += 2048) { // forward, as the game reads
+        const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(2048, kBlocks * kPer - pos));
+        t->read_stereo(static_cast<std::int64_t>(pos), n, out.data());
+        for (std::uint32_t k = 0; k < n; ++k)
+            wrong += out[2 * k] != expect(pos + k, 1) || out[2 * k + 1] != expect(pos + k, -1);
+    }
+    check(wrong == 0, "forward 2048-frame reads across read chunks: every frame from its block (" + std::to_string(wrong) + " wrong)");
+    wrong = 0;
+    for (std::uint64_t pos : {5000ull * kPer + 3, 10ull * kPer, 3000ull * kPer + 16, 5999ull * kPer, 1ull * kPer + 1}) {
+        t->read_stereo(static_cast<std::int64_t>(pos), 1, out.data());
+        wrong += out[0] != expect(pos, 1) || out[1] != expect(pos, -1);
+    }
+    check(wrong == 0, "jumps backward and forward re-read the right blocks");
+    t->read_stereo(static_cast<std::int64_t>(kBlocks) * kPer - 1, 2, out.data());
+    check(out[0] == expect(kBlocks * kPer - 1, 1) && out[2] == 0 && out[3] == 0, "last frame, then silence past the end");
+}
+
 void test_index_and_atrac() {
     psprecomp::Runtime rt;
     auto &m = rt.memory();
@@ -231,14 +262,75 @@ void test_movies() {
     check(movies.next_audio(handle, pcm.data()), "no decoder: the audio still plays");
 }
 
+// Read-ahead of the converted stream: 300 access units of 2,000-2,999 bytes (about 750 KB, several
+// read chunks) plus one unit larger than a chunk; every picture must come from its own unit.
+void test_movie_read_ahead() {
+    std::vector<std::uint8_t> video;
+    std::vector<std::uint8_t> idx = {'P', '3', 'M', 'V'};
+    constexpr std::uint32_t kUnits = 301, kBig = 150;
+    for (std::uint32_t v : {1u, 16u, 8u, kUnits}) put32(idx, v);
+    for (std::uint32_t k = 0; k < kUnits; ++k) {
+        const std::uint32_t size = k == kBig ? static_cast<std::uint32_t>(media::MovieTrack::kReadChunk) + 1000u : 2000u + (k * 37u) % 1000u;
+        put32(idx, static_cast<std::uint32_t>(video.size()));
+        put32(idx, size);
+        for (std::uint32_t b = 0; b + 1 < size; ++b) video.push_back(static_cast<std::uint8_t>(b * 7u + k));
+        video.push_back(static_cast<std::uint8_t>(k % 251u)); // the fake decoder's picture value
+    }
+    write(kTmp / "ra.h264", video);
+    write(kTmp / "ra.idx", idx);
+    media::set_video_decoder_factory([](std::uint32_t, std::uint32_t) { return std::make_unique<FakeDecoder>(); });
+    auto track = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-");
+    check(track != nullptr && track->frames() == kUnits, "read-ahead movie opens with 301 units");
+    bool all = track != nullptr;
+    for (std::uint32_t k = 0; all && k < kUnits; ++k) {
+        const std::uint32_t *p = track->picture(k);
+        all = p != nullptr && p[0] == k % 251u && p[127] == k % 251u;
+        if (!all) check(false, "picture " + std::to_string(k) + " comes from its own unit");
+    }
+    check(all, "all 301 pictures come from their own units (chunk boundaries and a unit larger than a chunk)");
+    check(track != nullptr && track->units_decoded() == kUnits, "one unit decoded per picture when none is skipped");
+    auto skip = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-");
+    const std::uint32_t *p = skip != nullptr ? skip->picture(9) : nullptr;
+    check(p != nullptr && p[0] == 9u && skip->units_decoded() == 10u, "skipping to picture 9 decodes units 0..9");
+    media::set_video_decoder_factory(nullptr);
+}
+
+// Write generations of movie pictures (sceMpegAvcCsc -> 3DS renderer).
+void test_picture_writes() {
+    media::forget_picture_writes();
+    std::uint64_t g = 0, a1 = 0, a2 = 0, b1 = 0;
+    check(!media::picture_write_generation(0x08F58010u, 512u, g), "no write yet: no generation");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, a1) && a1 != 0u, "written address has a generation");
+    check(media::picture_write_generation(0x48F58010u, 512u, g) && g == a1, "uncached mirror is the same address");
+    check(!media::picture_write_generation(0x08F58010u, 480u, g), "other stride: no generation");
+    check(!media::picture_write_generation(0x08F58020u, 512u, g), "other address: no generation");
+    media::note_picture_write(0x08ED0010u, 512u); // Persona's second movie texture
+    check(media::picture_write_generation(0x08ED0010u, 512u, b1) && b1 > a1, "second buffer: newer generation");
+    check(media::picture_write_generation(0x08F58010u, 512u, g) && g == a1, "first buffer unchanged by the second");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, a2) && a2 > b1, "rewrite: generation grows");
+    for (std::uint32_t k = 0; k < 4; ++k) media::note_picture_write(0x09000000u + k * 0x100000u, 512u);
+    check(!media::picture_write_generation(0x08ED0010u, 512u, g), "four newer addresses evict the oldest");
+    media::forget_picture_writes();
+    check(!media::picture_write_generation(0x09000000u, 512u, g), "forget drops every address");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, g) && g > a2, "generations keep growing after forget");
+    media::fork_movies().release(0x12345678u);
+    check(!media::picture_write_generation(0x08F58010u, 512u, g), "a movie ending (sceMpegDelete) forgets the writes");
+}
+
 } // namespace
 
 int main() {
     std::filesystem::create_directories(kTmp);
     test_fnv();
     test_ima();
+    test_ima_read_ahead();
     test_index_and_atrac();
     test_movies();
+    test_movie_read_ahead();
+    test_picture_writes();
     std::cout << "fork media failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

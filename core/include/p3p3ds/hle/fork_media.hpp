@@ -37,6 +37,7 @@ public:
     void read_stereo(std::int64_t position, std::uint32_t count, std::int16_t *out);
     [[nodiscard]] std::uint32_t channels() const noexcept { return channels_; }
     [[nodiscard]] std::uint64_t samples() const noexcept { return total_; }
+    static constexpr std::size_t kReadChunk = 64u * 1024u; // read-ahead of the data chunk (blocks are read in order)
 
 private:
     ImaTrack() = default;
@@ -45,7 +46,8 @@ private:
     std::uint32_t channels_{}, block_align_{}, per_block_{};
     std::uint64_t data_off_{}, data_size_{}, total_{};
     std::uint64_t cached_block_{~0ull};
-    std::vector<std::uint8_t> raw_;
+    std::vector<std::uint8_t> chunk_; // file bytes [chunk_offset_, chunk_offset_ + chunk_.size())
+    std::uint64_t chunk_offset_{};
     std::vector<std::int16_t> pcm_; // per_block_ frames, interleaved
 };
 

@@ -55,6 +55,7 @@ std::shared_ptr<ImaTrack> ImaTrack::open(const std::string &path) {
     std::shared_ptr<ImaTrack> t(new ImaTrack());
     t->file_ = std::fopen(path.c_str(), "rb");
     if (t->file_ == nullptr) return nullptr;
+    std::setvbuf(t->file_, nullptr, _IONBF, 0); // decode_block does its own read-ahead
     std::uint8_t head[12];
     if (std::fread(head, 1, 12, t->file_) != 12 || std::memcmp(head, "RIFF", 4) != 0 || std::memcmp(head + 8, "WAVE", 4) != 0)
         return nullptr;
@@ -89,7 +90,6 @@ std::shared_ptr<ImaTrack> ImaTrack::open(const std::string &path) {
     }
     const std::uint64_t blocks = t->data_size_ / t->block_align_;
     t->total_ = fact != 0 ? std::min<std::uint64_t>(fact, blocks * t->per_block_) : blocks * t->per_block_;
-    t->raw_.resize(t->block_align_);
     t->pcm_.resize(static_cast<std::size_t>(t->per_block_) * t->channels_);
     return t;
 }
@@ -101,18 +101,27 @@ ImaTrack::~ImaTrack() {
 bool ImaTrack::decode_block(std::uint64_t block) {
     if (block == cached_block_) return true;
     cached_block_ = ~0ull;
-    if (std::fseek(file_, static_cast<long>(data_off_ + block * block_align_), SEEK_SET) != 0 ||
-        std::fread(raw_.data(), 1, block_align_, file_) != block_align_)
-        return false;
+    // Persona3DS: blocks come from a read-ahead chunk of the file (one SD read per kReadChunk instead of a
+    // seek and read per block: movie audio cost about 9 ms per 2048-sample sceMpegAtracDecode on the New 3DS).
+    const std::uint64_t offset = data_off_ + block * block_align_;
+    if (offset < chunk_offset_ || offset + block_align_ > chunk_offset_ + chunk_.size()) {
+        chunk_.resize(std::max<std::size_t>(kReadChunk, block_align_));
+        std::size_t got = 0;
+        if (std::fseek(file_, static_cast<long>(offset), SEEK_SET) == 0) got = std::fread(chunk_.data(), 1, chunk_.size(), file_);
+        chunk_.resize(got);
+        chunk_offset_ = offset;
+        if (got < block_align_) return false;
+    }
+    const std::uint8_t *raw = chunk_.data() + (offset - chunk_offset_);
     const std::uint32_t ch = channels_;
     ImaState s[2]{};
     for (std::uint32_t c = 0; c < ch; ++c) {
-        s[c].predictor = static_cast<std::int16_t>(le16(&raw_[c * 4u]));
-        s[c].index = std::clamp<int>(raw_[c * 4u + 2u], 0, 88);
+        s[c].predictor = static_cast<std::int16_t>(le16(&raw[c * 4u]));
+        s[c].index = std::clamp<int>(raw[c * 4u + 2u], 0, 88);
         pcm_[c] = static_cast<std::int16_t>(s[c].predictor);
     }
     // Then groups of 4 bytes (8 samples, low nibble first) per channel, channels alternating.
-    const std::uint8_t *p = &raw_[4u * ch];
+    const std::uint8_t *p = &raw[4u * ch];
     for (std::uint32_t group = 0; 1u + group * 8u < per_block_; ++group)
         for (std::uint32_t c = 0; c < ch; ++c)
             for (std::uint32_t b = 0; b < 4u; ++b, ++p) {

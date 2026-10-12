@@ -606,7 +606,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
     const u64 now = osGetTime();
     const double wall = static_cast<double>(now - s.start_ms) / 1000.0;
     const double guest = static_cast<double>(k.threads().now()) / 1e6;
-    char buf[1536];
+    char buf[2048]; // Persona3DS: was 1536; a movie report with every line is about 1,500 characters
     std::snprintf(buf, sizeof buf,
         "%s - %s (%s)\n"
         "static recompilation port\n"
@@ -626,7 +626,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         "audio  : %s\n"
         "music  : %lu converted, %lu matched, %lu unmatched\n"
         "movies : %lu converted, %lu matched, %lu unmatched, %lu pictures, %lu audio, %lu failed\n"
-        "         %s; decode %.2f ms, copy %.2f ms per picture\n"
+        "         %s; decode %.2f ms (read %.2f), copy %.2f ms per picture, %.2f units per picture\n"
         "stop   : %s\n"
         "%s"
         "\nSTART+SELECT: quit\n",
@@ -650,8 +650,12 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
         p3p3ds::hle::media::fork_movies().decoder_status().empty() ? "-" : p3p3ds::hle::media::fork_movies().decoder_status().c_str(),
         p3p3ds::hle::media::fork_movies().stats().pictures != 0u
             ? p3p3ds::hle::media::fork_movies().stats().decode_us / 1000.0 / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
+        p3p3ds::hle::media::fork_movies().stats().pictures != 0u // Persona3DS: SD read time and access units per picture
+            ? p3p3ds::hle::media::fork_movies().stats().read_us / 1000.0 / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
         p3p3ds::hle::media::fork_movies().stats().pictures != 0u
             ? p3p3ds::hle::media::fork_movies().stats().copy_us / 1000.0 / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
+        p3p3ds::hle::media::fork_movies().stats().pictures != 0u
+            ? static_cast<double>(p3p3ds::hle::media::fork_movies().stats().units) / p3p3ds::hle::media::fork_movies().stats().pictures : 0.0,
         rt.stopped() ? rt.stop_reason().c_str() : "-", profile_text(s).c_str());
     return buf;
 }

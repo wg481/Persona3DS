@@ -4,9 +4,14 @@
 // main.cpp only (keeps the runner's object list unchanged for the builder).
 // Sequence from devkitPro 3ds-examples mvd/source/main.c and libctru
 // include/3ds/services/mvd.h: NAL units are fed with a 3-byte 00 00 01 prefix
-// from linear memory, then the picture is rendered to an RGB565 buffer.
-// [UNVERIFIED] on hardware: access to mvd:STD from a .3dsx, the work-buffer
-// size from mvdstdCalculateBufferSize, and the RGB565 channel order.
+// from linear memory, then the picture is rendered to a 16-bit buffer.
+// Output type MVD_OUTPUT_BGR565: in libctru's naming that is red in bits
+// 11-15 (the layout lut_ below expects). [VERIFIED] devkitPro 3ds-examples
+// mvd/source/main.c decodes H.264 with MVD_OUTPUT_BGR565 straight into a
+// GSP_RGB565_OES framebuffer (red in the high bits). MVD_OUTPUT_RGB565 gave
+// red and blue swapped on the maintainer's New 3DS (blue faces in an FMV).
+// [VERIFIED] maintainer's New 3DS: mvd:STD is reachable from the .3dsx and
+// the work buffer from mvdstdCalculateBufferSize (3,063 KiB at level 3.0).
 #include "p3p3ds/hle/fork_movie.hpp"
 
 #include <3ds.h>
@@ -35,7 +40,7 @@ public:
         in_ = static_cast<std::uint8_t *>(linearMemAlign(kInBytes, 0x40));
         out_ = static_cast<std::uint16_t *>(linearMemAlign(width * height * 2u, 0x40));
         if (in_ == nullptr || out_ == nullptr) { status_ = "mvd: no linear memory for buffers"; return; }
-        init_ = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_RGB565, workbuf_, nullptr);
+        init_ = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_BGR565, workbuf_, nullptr); // see the header comment
         char text[96];
         std::snprintf(text, sizeof text, "mvd init %08lx work %lu KiB", static_cast<unsigned long>(init_),
                       static_cast<unsigned long>(workbuf_ / 1024u));
@@ -53,6 +58,7 @@ public:
     bool decode(const std::uint8_t *au, std::size_t size, std::uint32_t *rgba, std::uint32_t width, std::uint32_t height) override {
         if (!ready_) return false;
         bool slice = false;
+        const u64 hw_start = svcGetSystemTick(); // Persona3DS: hardware (process + render) vs CPU conversion time
         const auto start_code = [&](std::size_t from) {
             for (std::size_t k = from; k + 3 <= size; ++k)
                 if (au[k] == 0 && au[k + 1] == 0 && au[k + 2] == 1) return k;
@@ -77,8 +83,10 @@ public:
         const Result r = mvdstdRenderVideoFrame(&config_, true);
         if (r != MVD_STATUS_OK) { note_error("render", r); return false; }
         GSPGPU_InvalidateDataCache(out_, width_ * height_ * 2u);
+        const u64 conv_start = svcGetSystemTick();
+        hw_ticks_ += conv_start - hw_start;
         const std::uint32_t w = width < width_ ? width : width_, h = height < height_ ? height : height_;
-        if (lut_.empty()) { // RGB565 -> PSP 8888, one lookup per pixel (256 KiB)
+        if (lut_.empty()) { // red-high 565 (MVD_OUTPUT_BGR565) -> PSP 8888, one lookup per pixel (256 KiB)
             lut_.resize(65536);
             for (std::uint32_t v = 0; v < 65536u; ++v) {
                 const std::uint32_t r5 = v >> 11, g6 = (v >> 5) & 63u, b5 = v & 31u;
@@ -90,9 +98,17 @@ public:
             std::uint32_t *dst = rgba + y * width;
             for (std::uint32_t x = 0; x < w; ++x) dst[x] = lut_[src[x]];
         }
+        conv_ticks_ += svcGetSystemTick() - conv_start;
+        ++timed_;
         return true;
     }
-    [[nodiscard]] std::string status() const override { return status_; }
+    [[nodiscard]] std::string status() const override {
+        if (timed_ == 0u) return status_;
+        char text[64]; // per picture: MVD process + render (includes waiting for the decoder), RGB565 -> 8888 table
+        const double ms = 1000.0 / static_cast<double>(SYSCLOCK_ARM11) / static_cast<double>(timed_);
+        std::snprintf(text, sizeof text, "; hw %.2f conv %.2f ms", static_cast<double>(hw_ticks_) * ms, static_cast<double>(conv_ticks_) * ms);
+        return status_ + text;
+    }
 
 private:
     static constexpr std::size_t kInBytes = 0x80000;
@@ -111,6 +127,8 @@ private:
     bool ready_{};
     std::string status_;
     std::vector<std::uint32_t> lut_;
+    u64 hw_ticks_{}, conv_ticks_{};
+    std::uint64_t timed_{};
 };
 
 inline void install_mvd_decoder() {
