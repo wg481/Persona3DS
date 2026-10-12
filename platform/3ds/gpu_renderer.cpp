@@ -81,6 +81,30 @@ std::uint32_t tiled_index(std::uint32_t x, std::uint32_t y, std::uint32_t w) {
 std::uint32_t to_rgba8(std::uint32_t c) {
     return ((c & 0xFFu) << 24) | (((c >> 8) & 0xFFu) << 16) | (((c >> 16) & 0xFFu) << 8) | (c >> 24);
 }
+
+// P3P3DS: PSP 8888 rows (r in the low byte, `stride` bytes apart) -> a PICA RGBA8 texture of tw x th
+// texels (multiples of 8), written tile by tile in memory order. Same result as storing
+// to_rgba8(texel) at tiled_index(x, tiled_row(y, th), tw) for every texel (the per-texel loop below),
+// without computing a scattered address per texel: Persona's 512x512 movie texture took about 15 ms
+// per upload that way on the New 3DS (report: GE tex 19.9 % of the time at about 13 pictures/s).
+void upload_rgba8_tiled(const std::uint8_t *src, std::size_t stride, std::uint32_t *dst, std::uint32_t tw, std::uint32_t th) {
+    static constexpr std::uint8_t kMorton[8][8] = { // [row in tile][column in tile] -> offset in the 8x8 tile
+        {0, 1, 4, 5, 16, 17, 20, 21},     {2, 3, 6, 7, 18, 19, 22, 23},     {8, 9, 12, 13, 24, 25, 28, 29},
+        {10, 11, 14, 15, 26, 27, 30, 31}, {32, 33, 36, 37, 48, 49, 52, 53}, {34, 35, 38, 39, 50, 51, 54, 55},
+        {40, 41, 44, 45, 56, 57, 60, 61}, {42, 43, 46, 47, 58, 59, 62, 63}};
+    for (std::uint32_t tile_y = 0; tile_y < th; tile_y += 8u)
+        for (std::uint32_t tile_x = 0; tile_x < tw; tile_x += 8u, dst += 64) {
+            for (std::uint32_t r = 0; r < 8u; ++r) {
+                const std::uint8_t *row = src + static_cast<std::size_t>(tiled_row(tile_y + r, th)) * stride + tile_x * 4u;
+                const std::uint8_t *m = kMorton[r];
+                for (std::uint32_t c = 0; c < 8u; ++c) {
+                    std::uint32_t v;
+                    std::memcpy(&v, row + c * 4u, 4u);
+                    dst[m[c]] = __builtin_bswap32(v); // == to_rgba8(v)
+                }
+            }
+        }
+}
 std::uint16_t to_16(std::uint32_t c, GPU_TEXCOLOR f) {
     const std::uint32_t r = c & 0xFFu, g = (c >> 8) & 0xFFu, b = (c >> 16) & 0xFFu, a = c >> 24;
     switch (f) {
@@ -507,7 +531,9 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
             const std::uint8_t *direct = info.format == 3u && !info.swizzled && tw == info.width && th == info.height && fmt == GPU_RGBA8
                                              ? memory.raw_pointer(info.address, static_cast<std::size_t>(info.stride) * 4u * (th - 1u) + tw * 4u)
                                              : nullptr;
-            if (direct != nullptr) {
+            if (direct != nullptr && tw % 8u == 0u && th % 8u == 0u) {
+                upload_rgba8_tiled(direct, static_cast<std::size_t>(info.stride) * 4u, static_cast<std::uint32_t *>(entry.tex.data), tw, th);
+            } else if (direct != nullptr) {
                 auto *dst = static_cast<std::uint32_t *>(entry.tex.data);
                 for (std::uint32_t y = 0; y < th; ++y) {
                     const std::uint8_t *row = direct + static_cast<std::size_t>(y) * info.stride * 4u;
