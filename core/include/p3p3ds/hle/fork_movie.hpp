@@ -57,10 +57,14 @@ public:
     [[nodiscard]] std::uint32_t frames() const noexcept { return static_cast<std::uint32_t>(aus_.size()); }
     [[nodiscard]] const std::shared_ptr<ImaTrack> &audio() const noexcept { return audio_; }
     [[nodiscard]] const VideoDecoder *decoder() const noexcept { return decoder_.get(); }
+    [[nodiscard]] std::uint64_t units_decoded() const noexcept { return units_; }
+    [[nodiscard]] std::uint64_t read_us() const noexcept { return read_us_; }
+    static constexpr std::size_t kReadChunk = 256u * 1024u; // read-ahead of the stream (units are read in order)
 
 private:
     MovieTrack() = default;
     bool decode_next();
+    const std::uint8_t *read_unit(std::uint32_t offset, std::uint32_t size);
     std::FILE *file_{};
     std::uint32_t width_{}, height_{};
     std::vector<std::pair<std::uint32_t, std::uint32_t>> aus_;
@@ -71,6 +75,9 @@ private:
     std::uint32_t next_{};      // next access unit to decode
     std::int64_t shown_{-1};    // picture index held in rgba_
     std::uint32_t pictures_{};  // pictures produced since the start
+    std::vector<std::uint8_t> chunk_; // stream bytes [chunk_offset_, chunk_offset_ + chunk_.size())
+    std::uint64_t chunk_offset_{};
+    std::uint64_t units_{}, read_us_{};
 };
 
 struct MovieEntry {
@@ -82,6 +89,7 @@ struct MovieEntry {
 struct MovieStats {
     std::uint32_t entries{}, matched{}, unmatched{}, pictures{}, audio_units{}, decode_failures{};
     std::uint64_t decode_us{}, copy_us{}; // host time decoding pictures / copying them in sceMpegAvcCsc
+    std::uint64_t units{}, read_us{};     // access units decoded (several per picture when the game skips some), time reading them
 };
 
 // Movie state of the game's sceMpeg instances, keyed by the mpeg handle.

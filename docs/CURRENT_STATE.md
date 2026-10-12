@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Write generation confirmed; movie stream read-ahead (2026-10-11)
+
+- [VERIFIED] Maintainer's New 3DS on `8197d397` (label now current), opening movie, last 10 s: speed 55 % (47 % on `b45dc61`), GE `hash` 0.0 % (17.9 %), `tex` 15.4 %, `gpu thd: busy 16 wait 14.9` (busy 30, wait 28.4), main core `hle 83 aot 11 idle 4`; whole run 73 % of real time, 35.4 game frames/s; `audio ... 0 late`; no failed allocation. The write-generation path removes the movie texture's hash as expected.
+- [VERIFIED] Same report, MVD split per picture: `hw 3.33 conv 2.27 ms` but `decode 16.62 ms`: about 11 ms of the decode time is outside `MvdDecoder::decode`. In `MovieTrack::picture` the only other work is `decode_next`'s `fseek` + `fread` of each access unit from the SD card, and decoding more than one unit when the game skips pictures between `sceMpegAvcCsc` calls (`hw`/`conv` are per decoded unit, `decode` per converted picture). [INFERRED] SD reads are most of the gap; the split below decides.
+- Change (`core/src/hle/fork_movie.cpp`, fork-owned): `MovieTrack::read_unit` serves access units from a 256 KiB read-ahead chunk of the stream (refilled with one `fseek` + `fread` when a unit is outside it; a unit larger than the chunk is read on its own; the `FILE` is unbuffered since the chunk is the buffer), so a sequential movie costs one SD read per 256 KiB instead of one per picture. Report line: `decode X ms (read R), copy C ms per picture, U units per picture` (`MovieStats::read_us`, `units`).
+- [VERIFIED] host tests (CTest 29/29): `test_movie_read_ahead` plays 301 units of 2,000-2,999 bytes plus one of 263,144 bytes (larger than a chunk) through `MovieTrack` and the fake decoder: every picture comes from its own unit, 301 units decoded, and jumping to picture 9 decodes units 0..9. With `read_unit` returning the chunk start instead of the unit's offset, `test_fork_media` reports 7 failures.
+- [UNVERIFIED] on the New 3DS: `read` well under 1 ms per picture and `decode` close to `hw + conv` (times units per picture).
+
 ## Movie texture checked by write generation, not by hashing; MVD time split (2026-10-11)
 
 - [VERIFIED] Maintainer's New 3DS on `b45dc61` (report label stale), opening movie, last 10 s: speed 47 % (was 51 % on `fa639b6`), GE `hash` 17.9 % (was 14.3 %), `tex` 11.0 %, `gpu thd wait` 28.4 %, MVD decode 16.96 ms, copy 2.67 ms per picture. The 32-bit hash (`hash_bytes32`) gave no gain: the claim that the 64-bit multiply bounded the hash is [WRONG]; [INFERRED] reading the 1 MiB texture from memory every frame is the cost, whatever the arithmetic. `hash_bytes32` is removed.

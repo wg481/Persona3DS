@@ -51,6 +51,7 @@ std::shared_ptr<MovieTrack> MovieTrack::open(const std::string &dir, const std::
     if (!ok || t->aus_.empty() || t->width_ == 0u || t->height_ == 0u || t->width_ > 1024u || t->height_ > 1024u) return nullptr;
     t->file_ = std::fopen((dir + "/" + video).c_str(), "rb");
     if (t->file_ == nullptr) return nullptr;
+    std::setvbuf(t->file_, nullptr, _IONBF, 0); // read_unit does its own read-ahead
     if (!audio.empty() && audio != "-") t->audio_ = ImaTrack::open(dir + "/" + audio);
     t->rgba_.assign(static_cast<std::size_t>(t->width_) * t->height_, 0xFF000000u);
     if (g_factory) t->decoder_ = g_factory(t->width_, t->height_);
@@ -61,12 +62,30 @@ MovieTrack::~MovieTrack() {
     if (file_ != nullptr) std::fclose(file_);
 }
 
+// The bytes of one access unit: from the read-ahead chunk, refilled from `offset` when the unit is not
+// inside it (one SD read per kReadChunk of stream instead of a seek and read per picture); a unit
+// larger than the chunk is read on its own.
+const std::uint8_t *MovieTrack::read_unit(std::uint32_t offset, std::uint32_t size) {
+    if (offset >= chunk_offset_ && offset + static_cast<std::uint64_t>(size) <= chunk_offset_ + chunk_.size())
+        return chunk_.data() + (offset - chunk_offset_);
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<std::uint8_t> &dst = size > kReadChunk ? au_ : chunk_;
+    dst.resize(size > kReadChunk ? size : kReadChunk);
+    std::size_t got = 0;
+    if (std::fseek(file_, static_cast<long>(offset), SEEK_SET) == 0) got = std::fread(dst.data(), 1, dst.size(), file_);
+    read_us_ += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+    dst.resize(got);
+    if (&dst == &chunk_) chunk_offset_ = offset;
+    return got >= size ? dst.data() : nullptr;
+}
+
 bool MovieTrack::decode_next() {
     if (next_ >= aus_.size()) return false;
     const auto [offset, size] = aus_[next_++];
-    au_.resize(size);
-    if (std::fseek(file_, static_cast<long>(offset), SEEK_SET) != 0 || std::fread(au_.data(), 1, size, file_) != size) return false;
-    if (!decoder_->decode(au_.data(), size, rgba_.data(), width_, height_)) return false;
+    const std::uint8_t *au = read_unit(offset, size);
+    if (au == nullptr) return false;
+    ++units_;
+    if (!decoder_->decode(au, size, rgba_.data(), width_, height_)) return false;
     ++pictures_;
     return true;
 }
@@ -114,7 +133,10 @@ const std::uint32_t *Movies::current_picture(std::uint32_t handle, std::uint32_t
     auto it = playing_.find(handle);
     if (it == playing_.end() || it->second.pictures == 0u) return nullptr;
     const auto start = std::chrono::steady_clock::now();
+    const std::uint64_t units = it->second.track->units_decoded(), read_us = it->second.track->read_us();
     const auto *p = it->second.track->picture(it->second.pictures - 1u);
+    stats_.units += it->second.track->units_decoded() - units;
+    stats_.read_us += it->second.track->read_us() - read_us;
     stats_.decode_us += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
     if (const auto *d = it->second.track->decoder()) decoder_status_ = d->status();

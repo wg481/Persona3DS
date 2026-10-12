@@ -231,6 +231,39 @@ void test_movies() {
     check(movies.next_audio(handle, pcm.data()), "no decoder: the audio still plays");
 }
 
+// Read-ahead of the converted stream: 300 access units of 2,000-2,999 bytes (about 750 KB, several
+// read chunks) plus one unit larger than a chunk; every picture must come from its own unit.
+void test_movie_read_ahead() {
+    std::vector<std::uint8_t> video;
+    std::vector<std::uint8_t> idx = {'P', '3', 'M', 'V'};
+    constexpr std::uint32_t kUnits = 301, kBig = 150;
+    for (std::uint32_t v : {1u, 16u, 8u, kUnits}) put32(idx, v);
+    for (std::uint32_t k = 0; k < kUnits; ++k) {
+        const std::uint32_t size = k == kBig ? static_cast<std::uint32_t>(media::MovieTrack::kReadChunk) + 1000u : 2000u + (k * 37u) % 1000u;
+        put32(idx, static_cast<std::uint32_t>(video.size()));
+        put32(idx, size);
+        for (std::uint32_t b = 0; b + 1 < size; ++b) video.push_back(static_cast<std::uint8_t>(b * 7u + k));
+        video.push_back(static_cast<std::uint8_t>(k % 251u)); // the fake decoder's picture value
+    }
+    write(kTmp / "ra.h264", video);
+    write(kTmp / "ra.idx", idx);
+    media::set_video_decoder_factory([](std::uint32_t, std::uint32_t) { return std::make_unique<FakeDecoder>(); });
+    auto track = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-");
+    check(track != nullptr && track->frames() == kUnits, "read-ahead movie opens with 301 units");
+    bool all = track != nullptr;
+    for (std::uint32_t k = 0; all && k < kUnits; ++k) {
+        const std::uint32_t *p = track->picture(k);
+        all = p != nullptr && p[0] == k % 251u && p[127] == k % 251u;
+        if (!all) check(false, "picture " + std::to_string(k) + " comes from its own unit");
+    }
+    check(all, "all 301 pictures come from their own units (chunk boundaries and a unit larger than a chunk)");
+    check(track != nullptr && track->units_decoded() == kUnits, "one unit decoded per picture when none is skipped");
+    auto skip = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-");
+    const std::uint32_t *p = skip != nullptr ? skip->picture(9) : nullptr;
+    check(p != nullptr && p[0] == 9u && skip->units_decoded() == 10u, "skipping to picture 9 decodes units 0..9");
+    media::set_video_decoder_factory(nullptr);
+}
+
 // Write generations of movie pictures (sceMpegAvcCsc -> 3DS renderer).
 void test_picture_writes() {
     media::forget_picture_writes();
@@ -264,6 +297,7 @@ int main() {
     test_ima();
     test_index_and_atrac();
     test_movies();
+    test_movie_read_ahead();
     test_picture_writes();
     std::cout << "fork media failures=" << failures << "\n";
     return failures ? 1 : 0;
