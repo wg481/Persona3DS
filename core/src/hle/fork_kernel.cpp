@@ -315,6 +315,45 @@ GeStallTiming &ge_stall_timing() noexcept {
     return timing;
 }
 
+namespace {
+struct GeStallBatch {
+    unsigned max{};       // 0: off
+    bool pending{};
+    int id{};
+    std::uint32_t stall{};
+    unsigned count{};
+};
+GeStallBatch g_ge_batch;
+
+// upstream's update_stall, timed into ge_stall_timing().units
+std::int32_t run_stall_update(psprecomp::Runtime &rt, int id, std::uint32_t stall) {
+    auto &p = host_profile();
+    const std::uint64_t start = profile_now(p);
+    const std::int32_t result = g_fork_kernel->ge().update_stall(rt, id, stall);
+    ge_stall_timing().units += profile_now(p) - start;
+    ++ge_stall_timing().flushes;
+    return result;
+}
+
+// Before every HLE import except sceGeListUpdateStallAddr itself: the import sees the GE as if
+// every recorded update had run (GE waits, GE queries, display, thread switches, I/O).
+void ge_stall_pre_import(psprecomp::Runtime &rt, psprecomp::AllegrexContext &, std::string_view library, std::uint32_t nid) {
+    if (!g_ge_batch.pending || (nid == 0xE0D68148u && library == "sceGe_user")) return;
+    ++ge_stall_timing().by_import;
+    flush_ge_stall(rt);
+}
+} // namespace
+
+void set_ge_stall_batching(unsigned max_updates) noexcept { g_ge_batch.max = max_updates; }
+
+void flush_ge_stall(psprecomp::Runtime &rt) {
+    auto &b = g_ge_batch;
+    if (!b.pending) return;
+    b.pending = false; // first: guest code run from the GE (finish callbacks) may call imports
+    b.count = 0;
+    (void)run_stall_update(rt, b.id, b.stall);
+}
+
 std::string ge_stall_top_opcodes(std::size_t count) {
     const auto &t = ge_stall_timing();
     std::array<std::uint32_t, 256> order{};
@@ -332,24 +371,42 @@ std::string ge_stall_top_opcodes(std::size_t count) {
 
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
+    g_ge_batch.pending = false; // a new runtime: nothing recorded (the cap set by the platform stays)
+    g_ge_batch.count = 0;
     // sceGe_user::0xE0D68148 sceGeListUpdateStallAddr: upstream's GeManager::update_stall, timed
-    // (ge_stall_timing). Replaces core/src/hle/ge.cpp's registration (fork imports register last).
+    // (ge_stall_timing), and batched when set_ge_stall_batching is on. Replaces
+    // core/src/hle/ge.cpp's registration (fork imports register last).
     runtime.register_hle("sceGe_user", 0xE0D68148u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         auto &t = ge_stall_timing();
-        if (const auto *list = kernel.ge().find(static_cast<int>(ctx.gpr[4]))) { // released words, before running them
+        auto &b = g_ge_batch;
+        const int id = static_cast<int>(ctx.gpr[4]);
+        const std::uint32_t stall = ctx.gpr[5];
+        const auto *list = kernel.ge().find(id);
+        ++t.calls;
+        if (list != nullptr) { // released words, before running them (from the pending stall when one is recorded)
             auto &m = rt.memory();
-            const std::uint32_t to = ctx.gpr[5] & 0x0FFFFFFCu;
-            for (std::uint32_t pc = list->pc, n = 0; pc < to && n < 4096u && m.contains(pc, 4u); pc += 4u, ++n) {
+            const std::uint32_t to = stall & 0x0FFFFFFCu;
+            const std::uint32_t from = b.pending && b.id == id && (b.stall & 0x0FFFFFFCu) > list->pc ? b.stall & 0x0FFFFFFCu : list->pc;
+            for (std::uint32_t pc = from, n = 0; pc < to && n < 4096u && m.contains(pc, 4u); pc += 4u, ++n) {
                 ++t.opcodes[m.aot_load32(pc) >> 24];
                 ++t.scanned;
             }
         }
-        auto &p = host_profile();
-        const std::uint64_t start = profile_now(p);
-        ctx.set_gpr(2, static_cast<std::uint32_t>(kernel.ge().update_stall(rt, static_cast<int>(ctx.gpr[4]), ctx.gpr[5])));
-        t.units += profile_now(p) - start;
-        ++t.calls;
+        const bool deferrable = b.max != 0u && list != nullptr && list->status != GeStatus::Completed && (stall & 3u) == 0u;
+        if (!deferrable) { // as upstream: run now (after anything pending, in order)
+            flush_ge_stall(rt);
+            ++t.direct;
+            ctx.set_gpr(2, static_cast<std::uint32_t>(run_stall_update(rt, id, stall)));
+            return;
+        }
+        if (b.pending && b.id != id) { ++t.by_list; flush_ge_stall(rt); }
+        b.pending = true;
+        b.id = id;
+        b.stall = stall;
+        ctx.set_gpr(2, 0u); // what update_stall returns for a known, running list and an aligned address
+        if (++b.count >= b.max) { ++t.by_cap; flush_ge_stall(rt); }
     });
+    psprecomp::set_runtime_pre_import_hook(&ge_stall_pre_import);
     g_vblank_subintr = VblankSubInterrupts{};
     g_module_stop_threads.clear();
     g_msgdialog = MsgDialogState{};

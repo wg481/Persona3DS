@@ -302,7 +302,22 @@ struct GeStallTiming {
     // through CALL are not followed, the CALLs themselves are counted).
     std::array<std::uint64_t, 256> opcodes{};
     std::uint64_t scanned{};
+    // Batching (set_ge_stall_batching): update_stall runs ("flushes"), and why: the
+    // batch reached its cap, another import was called, another list was updated,
+    // or the update could not be deferred (unknown/completed list, unaligned).
+    std::uint64_t flushes{}, by_cap{}, by_import{}, by_list{}, direct{};
 };
+
+// Persona3DS: sceGeListUpdateStallAddr batching. With max_updates > 0, a valid
+// stall update only records the new stall address; the GE runs the released
+// commands (GeManager::update_stall) once max_updates updates are pending, before
+// any other HLE import (pre-import hook), or when another list is updated. Every
+// import therefore sees the GE as if each update had run at once; only updates
+// with nothing but game code between them are run together. 0 (the default)
+// runs every update at once, as upstream. The New 3DS runner turns it on.
+void set_ge_stall_batching(unsigned max_updates) noexcept;
+// Runs the pending stall update, if any (also used by tests).
+void flush_ge_stall(psprecomp::Runtime &rt);
 // The `count` opcodes most often released per call so far, as "op:per-call"
 // pairs, e.g. "C4:1.0 04:1.0 0A:0.9".
 [[nodiscard]] std::string ge_stall_top_opcodes(std::size_t count);

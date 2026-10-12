@@ -514,6 +514,75 @@ void test_ge_stall_timing() {
     CHECK(p3p3ds::hle::ge_stall_top_opcodes(3).find("0F:") != std::string::npos);
 }
 
+// sceGeListUpdateStallAddr batching (set_ge_stall_batching): a deferred update leaves the
+// list where it was; another import, the cap, another list or an update that cannot be
+// deferred runs it first; sceGeDrawSync sees the finished list.
+void test_ge_stall_batching() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    p3p3ds::hle::set_ge_stall_batching(4);
+    auto &m = rt.memory();
+    constexpr std::uint32_t kA = 0x08A20000u, kB = 0x08A30000u;
+    for (std::uint32_t k = 0; k < 16u; ++k) { m.store32(kA + 4u * k, 0x00000000u); m.store32(kB + 4u * k, 0x00000000u); } // NOPs
+    m.store32(kA + 64u, 0x0F000000u); m.store32(kA + 68u, 0x0C000000u); // FINISH, END
+    const auto enqueue = [&](std::uint32_t list) {
+        rt.cpu().set_gpr(4, list); rt.cpu().set_gpr(5, list); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+        rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+        return static_cast<int>(rt.cpu().gpr[2]);
+    };
+    const auto stall = [&](int id, std::uint32_t address) {
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(id)); rt.cpu().set_gpr(5, address); rt.cpu().set_gpr(2, 0xDEADBEEFu);
+        rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+        return rt.cpu().gpr[2];
+    };
+    const auto pc = [&](int id) { const auto *l = kernel.ge().find(id); return l != nullptr ? l->pc : 0u; };
+    const int a = enqueue(kA);
+    CHECK(a >= 0 && pc(a) == kA);
+    // Deferred: returns 0, the list does not move.
+    CHECK(stall(a, kA + 4u) == 0u);
+    CHECK(pc(a) == kA);
+    CHECK(stall(a, kA + 8u) == 0u);
+    CHECK(pc(a) == kA);
+    // Another import runs it first (sceGeEdramGetAddr).
+    rt.invoke_import("sceGe_user", 0xE47E40E4u, rt.cpu());
+    CHECK(pc(a) == kA + 8u);
+    // The cap: the 4th update runs all four.
+    for (std::uint32_t k = 3; k <= 5u; ++k) { CHECK(stall(a, kA + 4u * k) == 0u); CHECK(pc(a) == kA + 8u); }
+    CHECK(stall(a, kA + 24u) == 0u);
+    CHECK(pc(a) == kA + 24u);
+    // An update of another list runs the pending one first.
+    CHECK(stall(a, kA + 28u) == 0u);
+    CHECK(pc(a) == kA + 24u);
+    const int b = enqueue(kB); // an import: runs the pending update
+    CHECK(pc(a) == kA + 28u && b >= 0);
+    // (b is queued behind a: as upstream, the GE runs only the list at the head of its queue, so b's
+    // updates are checked through the stall address and the flush counters.)
+    auto &timing = p3p3ds::hle::ge_stall_timing();
+    const auto by_list = timing.by_list, direct = timing.direct;
+    const auto stall_of = [&](int id) { const auto *l = kernel.ge().find(id); return l != nullptr ? l->stall_address : 0u; };
+    CHECK(stall(a, kA + 32u) == 0u);
+    CHECK(stall(b, kB + 4u) == 0u); // a's pending update runs first
+    CHECK(pc(a) == kA + 32u && timing.by_list == by_list + 1u);
+    CHECK(stall_of(b) == kB); // b's update is recorded, not applied
+    // An unaligned address is not deferred: the pending update first, then upstream's error.
+    const auto unaligned = stall(b, kB + 6u);
+    CHECK(stall_of(b) == kB + 4u && timing.direct == direct + 1u);
+    CHECK(unaligned == static_cast<std::uint32_t>(kernel.ge().update_stall(rt, b, kB + 6u)));
+    // Release a up to its END, deferred; sceGeListSync(a, 0) runs it first and sees it finished.
+    CHECK(stall(a, kA + 72u) == 0u);
+    CHECK(pc(a) == kA + 32u);
+    rt.cpu().set_gpr(4, static_cast<std::uint32_t>(a)); rt.cpu().set_gpr(5, 0u);
+    rt.invoke_import("sceGe_user", 0x03444EB4u, rt.cpu());
+    CHECK(!rt.stopped());
+    const auto *done = kernel.ge().find(a);
+    CHECK(done != nullptr && done->status == p3p3ds::hle::GeStatus::Completed);
+    // Off again (other tests and the PC runner run every update at once): b is at the head now.
+    p3p3ds::hle::set_ge_stall_batching(0);
+    CHECK(stall(b, kB + 8u) == 0u);
+    CHECK(pc(b) == kB + 8u);
+}
+
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
 // 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
 void test_mpeg_avc_csc() {
@@ -989,6 +1058,7 @@ int main() {
     test_refer_event_flag();
     test_mpeg_decode_ycbcr();
     test_ge_stall_timing();
+    test_ge_stall_batching();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();
     test_umd_deactivate();

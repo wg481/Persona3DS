@@ -192,7 +192,7 @@ struct TimeSample {
     u64 fill{};                                // model vertices into the arena (part of vertex)
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
     double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
-    double stall_calls{}, stall_ticks{};                  // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall
+    double stall_calls{}, stall_ticks{}, stall_flushes{}; // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall, its runs
     double front_draw{}, front_sync{};                    // Persona3DS: ticks in renderer draw() / sync() on the game's thread
     double vc_hits{}, vc_uses{};               // vertex cache hits / model draws that asked it
     double guest_us{}, hle_ns{}, render_ns{}, io_ns{}, io_bytes{}, hle_calls{};
@@ -533,6 +533,7 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
     t.ge_cmds = static_cast<double>(p3p3ds::host_profile().ge_commands);
     t.stall_calls = static_cast<double>(p3p3ds::hle::ge_stall_timing().calls);
     t.stall_ticks = static_cast<double>(p3p3ds::hle::ge_stall_timing().units);
+    t.stall_flushes = static_cast<double>(p3p3ds::hle::ge_stall_timing().flushes);
     t.front_draw = static_cast<double>(g_ge_front.draw_ticks);
     t.front_sync = static_cast<double>(g_ge_front.sync_ticks);
     t.vblanks = s.frames;
@@ -604,10 +605,19 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         text += buf;
         // Persona3DS: sceGeListUpdateStallAddr: calls per second and the time per call spent in the GE
         // work itself (update_stall); the per-import time in profile_seconds.csv also holds the call's cost.
-        const double stalls = b.stall_calls - a.stall_calls;
-        std::snprintf(buf, sizeof buf, " stall: %.1fk/s, GE work %.1f us per call\n", stalls / s.wall / 1000.0,
-                      stalls > 0 ? (b.stall_ticks - a.stall_ticks) * kNsPerTick / 1000.0 / stalls : 0.0);
+        // With batching (set_ge_stall_batching) several updates run per flush: GE work is shown per
+        // update (comparable with the unbatched runs) and the flushes per second.
+        const double stalls = b.stall_calls - a.stall_calls, flushes = b.stall_flushes - a.stall_flushes;
+        std::snprintf(buf, sizeof buf, " stall: %.1fk/s, %.1fk runs/s, GE work %.1f us per update\n", stalls / s.wall / 1000.0,
+                      flushes / s.wall / 1000.0, stalls > 0 ? (b.stall_ticks - a.stall_ticks) * kNsPerTick / 1000.0 / stalls : 0.0);
         text += buf;
+        {
+            const auto &g = p3p3ds::hle::ge_stall_timing(); // whole run: why each batch ran
+            std::snprintf(buf, sizeof buf, " stall runs: cap %llu import %llu list %llu direct %llu\n",
+                          static_cast<unsigned long long>(g.by_cap), static_cast<unsigned long long>(g.by_import),
+                          static_cast<unsigned long long>(g.by_list), static_cast<unsigned long long>(g.direct));
+            text += buf;
+        }
         // Persona3DS: per stall update, the GE work split into the renderer's draw() and sync() (exact)
         // and the rest (command processing); all three in us per stall update over the last 10 s.
         if (stalls > 0) {
@@ -965,6 +975,14 @@ int main() {
         }
         // GE back end on core 2 when the probe found a parallel core 2;
         // sdmc:/persona3ds/no_gpu_thread.txt keeps it on the game's thread (A/B runs).
+        // Persona3DS: sceGeListUpdateStallAddr batching (fork_kernel.hpp), up to 32 updates per run of
+        // the GE; sdmc:/persona3ds/no_ge_batch.txt runs every update at once (A/B runs).
+        {
+            unsigned batch = 32u;
+            if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_ge_batch.txt", "r")) { batch = 0u; std::fclose(f); }
+            p3p3ds::hle::set_ge_stall_batching(batch);
+            stats.cores += batch != 0u ? "" : ", no GE batch";
+        }
         bool gpu_thread = stats.cores.rfind("core2 ok", 0) == 0;
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_gpu_thread.txt", "r")) { gpu_thread = false; std::fclose(f); }
         if (gpu_thread) {
@@ -1023,6 +1041,7 @@ int main() {
             const auto vblank = kernel.threads().vblank_count();
             if (vblank == last_presented_vblank) return;
             last_presented_vblank = vblank;
+            p3p3ds::hle::flush_ge_stall(rt); // Persona3DS: batched GE updates run before the frame is shown
             g_ndsp->pump(); // Persona3DS: queue complete sound blocks
             // Persona3DS: sdmc:/persona3ds/draw_trace.txt -> trace 8 presents of the movie once 60 pictures were
             // shown, into draw_trace_out.txt (one line per draw / upload / present; movie flicker evidence).
