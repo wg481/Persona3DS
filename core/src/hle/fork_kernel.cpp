@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -314,15 +315,38 @@ GeStallTiming &ge_stall_timing() noexcept {
     return timing;
 }
 
+std::string ge_stall_top_opcodes(std::size_t count) {
+    const auto &t = ge_stall_timing();
+    std::array<std::uint32_t, 256> order{};
+    for (std::uint32_t i = 0; i < 256u; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) { return t.opcodes[a] > t.opcodes[b]; });
+    std::string text;
+    for (std::size_t k = 0; k < count && t.calls != 0u && t.opcodes[order[k]] != 0u; ++k) {
+        char item[24];
+        std::snprintf(item, sizeof item, "%s%02X:%.1f", text.empty() ? "" : " ", static_cast<unsigned>(order[k]),
+                      static_cast<double>(t.opcodes[order[k]]) / static_cast<double>(t.calls));
+        text += item;
+    }
+    return text;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
     // sceGe_user::0xE0D68148 sceGeListUpdateStallAddr: upstream's GeManager::update_stall, timed
     // (ge_stall_timing). Replaces core/src/hle/ge.cpp's registration (fork imports register last).
     runtime.register_hle("sceGe_user", 0xE0D68148u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &t = ge_stall_timing();
+        if (const auto *list = kernel.ge().find(static_cast<int>(ctx.gpr[4]))) { // released words, before running them
+            auto &m = rt.memory();
+            const std::uint32_t to = ctx.gpr[5] & 0x0FFFFFFCu;
+            for (std::uint32_t pc = list->pc, n = 0; pc < to && n < 4096u && m.contains(pc, 4u); pc += 4u, ++n) {
+                ++t.opcodes[m.aot_load32(pc) >> 24];
+                ++t.scanned;
+            }
+        }
         auto &p = host_profile();
         const std::uint64_t start = profile_now(p);
         ctx.set_gpr(2, static_cast<std::uint32_t>(kernel.ge().update_stall(rt, static_cast<int>(ctx.gpr[4]), ctx.gpr[5])));
-        auto &t = ge_stall_timing();
         t.units += profile_now(p) - start;
         ++t.calls;
     });

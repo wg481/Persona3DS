@@ -3,6 +3,7 @@
 // Kept in their own files (plus one registration call in hle_modules.cpp) so
 // that upstream P3P3DS changes keep merging; drop an entry here if upstream
 // implements the same NID.
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -296,7 +297,15 @@ inline constexpr std::uint64_t kUmdMinWaitUs = 250u;
 // The first dungeon calls it about 10,500 times a second.
 struct GeStallTiming {
     std::uint64_t calls{}, units{};
+    // Opcodes of the commands each call releases, read from the list's current
+    // pc up to the new stall address (the list's own words; sub-lists reached
+    // through CALL are not followed, the CALLs themselves are counted).
+    std::array<std::uint64_t, 256> opcodes{};
+    std::uint64_t scanned{};
 };
+// The `count` opcodes most often released per call so far, as "op:per-call"
+// pairs, e.g. "C4:1.0 04:1.0 0A:0.9".
+[[nodiscard]] std::string ge_stall_top_opcodes(std::size_t count);
 [[nodiscard]] GeStallTiming &ge_stall_timing() noexcept;
 
 inline constexpr std::uint64_t kVblankLengthUs = 732u;

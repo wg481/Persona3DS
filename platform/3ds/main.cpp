@@ -573,6 +573,9 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         std::snprintf(buf, sizeof buf, " stall: %.1fk/s, GE work %.1f us per call\n", stalls / s.wall / 1000.0,
                       stalls > 0 ? (b.stall_ticks - a.stall_ticks) * kNsPerTick / 1000.0 / stalls : 0.0);
         text += buf;
+        // Persona3DS: opcodes most often released per stall update (whole run; hex opcode:count per call).
+        std::snprintf(buf, sizeof buf, " stall ops: %s\n", p3p3ds::hle::ge_stall_top_opcodes(7).c_str());
+        text += buf;
     }
     return text;
 }

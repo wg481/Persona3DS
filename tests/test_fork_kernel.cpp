@@ -508,6 +508,10 @@ void test_ge_stall_timing() {
     CHECK(stall(id, kList + 12u) == 0u);
     CHECK(!rt.stopped());
     CHECK(p3p3ds::hle::ge_stall_timing().calls == before + 3u);
+    // The released words of the last call were the NOP, FINISH and END: one of each counted.
+    const auto &timing = p3p3ds::hle::ge_stall_timing();
+    CHECK(timing.opcodes[0x00] >= 1u && timing.opcodes[0x0F] >= 1u && timing.opcodes[0x0C] >= 1u);
+    CHECK(p3p3ds::hle::ge_stall_top_opcodes(3).find("0F:") != std::string::npos);
 }
 
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
