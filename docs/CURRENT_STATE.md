@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Movie colours: MVD output type; flicker persists after the blit fix (2026-10-11)
+
+- [VERIFIED] Maintainer's New 3DS on the build with the `blit` bind-cache fix: the opening movie still flickers and runs below full speed, so the stale `bound_tex_` was not the (only) cause of the flicker; the fix stays (it is correct on its own). A later FMV plays slightly faster but with wrong colours: faces blue instead of light tan.
+- Blue for tan is a red/blue swap. `platform/3ds/fork_mvd.hpp` initialised MVD with `MVD_OUTPUT_RGB565` and converted with a table that expects red in bits 11-15. [VERIFIED] devkitPro `3ds-examples` `mvd/source/main.c` decodes H.264 with `MVD_OUTPUT_BGR565` directly into a `GSP_RGB565_OES` framebuffer (red in the high bits) and shows correct colours; libctru `include/3ds/services/mvd.h` names the two values `MVD_OUTPUT_BGR565 = 0x00040002` and `MVD_OUTPUT_RGB565 = 0x00040004`. Change: `MVD_OUTPUT_BGR565`, table unchanged. [UNVERIFIED] on hardware until the maintainer sees the FMV with tan faces. This also accounts for the earlier "colours/details missing" in the opening movie ([INFERRED]).
+- Draw trace extended for the flicker (`P3P3DS:` patch, `gpu_renderer.cpp`, screen-space draws): `bind 0/1` (whether this draw issued `C3D_TexBind`), `zt <enabled>:<func>` (GE 0x23 / 0xDE), `zmask` (0xE7) and the `z` range of the draw. Open leads, to be decided by a new `draw_trace_out.txt` from this build: (a) the textured strips into the black framebuffer still do not rebind (`bind 0` after a present would mean another state path skips the bind); (b) they rebind but fail the depth test against the depth buffer all render targets share (`shared_depth_`), which would show as `zt 1` with a z range equal to the clear sprites' z.
+- Not compiled here (no devkitARM in the session); the PR's CI job "New 3DS runtime (devkitARM)" compiles both files.
+
 ## Handoff from the cloud session (2026-10-11)
 
 State: PC boots through New Game into gameplay with music and movies; New 3DS runs title, menus and gameplay at full speed with sound; 3DS movies decode on MVD but flicker and run at ~50-60 %.

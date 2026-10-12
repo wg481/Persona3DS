@@ -823,10 +823,12 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
         apply_fragment_state(regs, tex != nullptr, clear_mode, sprites);
         frag_key_ = key;
     }
+    bool rebound = false; // P3P3DS: draw trace (whether this draw issued C3D_TexBind)
     if (tex != nullptr && (!state_valid_ || tex != bound_tex_ || std::memcmp(tex, &bound_tex_copy_, sizeof(C3D_Tex)) != 0)) {
         C3D_TexBind(0, tex);
         bound_tex_ = tex;
         std::memcpy(&bound_tex_copy_, tex, sizeof(C3D_Tex));
+        rebound = true;
     }
     set_scissor(regs);
     state_valid_ = true;
@@ -838,24 +840,27 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
 
     ge::decode_screen_vertices(memory, regs, count, vertex_address, index_address, screen_);
     if (trace_ != nullptr && !screen_.empty()) { // P3P3DS: draw trace (start_trace)
-        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
         unsigned clipped = 0;
         for (const auto &v : screen_) {
             x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+            z0 = std::min(z0, v.z); z1 = std::max(z1, v.z);
             u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
             clipped += v.clipped ? 1u : 0u;
         }
         const auto ti = ge::texture_info(regs);
         const auto &c = screen_.front().color;
         std::fprintf(trace_, "draw fb %08lx prim %u n %lu tex %s %08lx %lux%lu fmt %lu bound %d blend %d:%06lx E0 %06lx E1 %06lx tfunc %06lx clear %lu "
-                             "x %.1f..%.1f y %.1f..%.1f u %.1f..%.1f v %.1f..%.1f rgba %02x%02x%02x%02x clipped %u vtype %06lx\n",
+                             "x %.1f..%.1f y %.1f..%.1f u %.1f..%.1f v %.1f..%.1f rgba %02x%02x%02x%02x clipped %u vtype %06lx "
+                             "bind %d zt %d:%lu zmask %lu z %.0f..%.0f\n",
                      static_cast<unsigned long>(color_address), static_cast<unsigned>(prim), static_cast<unsigned long>(count),
                      textured ? "on" : "off", static_cast<unsigned long>(ti.address), static_cast<unsigned long>(ti.width),
                      static_cast<unsigned long>(ti.height), static_cast<unsigned long>(ti.format), tex != nullptr ? 1 : 0,
                      on(regs, 0x21) ? 1 : 0, static_cast<unsigned long>(r24(regs, 0xDF)), static_cast<unsigned long>(r24(regs, 0xE0)),
                      static_cast<unsigned long>(r24(regs, 0xE1)), static_cast<unsigned long>(r24(regs, 0xC9)),
                      static_cast<unsigned long>(r24(regs, 0xD3)), x0, x1, y0, y1, u0, u1, v0, v1, c[0], c[1], c[2], c[3], clipped,
-                     static_cast<unsigned long>(r24(regs, 0x12)));
+                     static_cast<unsigned long>(r24(regs, 0x12)), rebound ? 1 : 0, on(regs, 0x23) ? 1 : 0,
+                     static_cast<unsigned long>(r24(regs, 0xDE) & 7u), static_cast<unsigned long>(r24(regs, 0xE7)), z0, z1);
     }
 
     const bool flat = (r24(regs, 0x50) & 1u) == 0u;
