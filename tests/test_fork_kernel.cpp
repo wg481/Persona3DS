@@ -9,6 +9,7 @@
 #include "p3p3ds/vfs.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -583,6 +584,62 @@ void test_ge_stall_batching() {
     CHECK(pc(b) == kB + 8u);
 }
 
+// LOADCLUT (GE 0xC4) after the P3P3DS fast path in core/src/hle/ge.cpp: the palette, its word
+// count and hash must equal the original per-word algorithm (contains + load32 per word, zero
+// elsewhere, FNV-style hash over clut_words words) for every kind of source range.
+void test_ge_loadclut_fast_path() {
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto &m = rt.memory();
+    std::uint32_t ram_end = 0x08000000u; // first address past guest RAM
+    while (m.contains(ram_end, 1u)) ram_end += 0x100000u;
+    while (!m.contains(ram_end - 1u, 1u)) --ram_end;
+    constexpr std::uint32_t kList = 0x08A40000u, kPal = 0x08A50000u;
+    std::uint32_t seed = 12345u;
+    const auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return seed; };
+    for (std::uint32_t k = 0; k < 256u; ++k) m.store32(kPal + 4u * k, rnd());
+    for (std::uint32_t k = 0; k < 256u; ++k) m.store32(0x04100000u + 4u * k, rnd()); // VRAM palette
+    for (std::uint32_t k = 0; k < 8u; ++k) m.store32(ram_end - 32u + 4u * k, rnd());
+    rt.cpu().set_gpr(4, kList); rt.cpu().set_gpr(5, kList); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+    rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+    const int id = static_cast<int>(rt.cpu().gpr[2]);
+    CHECK(id >= 0);
+    std::uint32_t pc = kList;
+    const auto load = [&](std::uint32_t address, std::uint32_t blocks) {
+        m.store32(pc, 0xB0000000u | (address & 0xFFFFF0u));
+        m.store32(pc + 4u, 0xB1000000u | ((address >> 8) & 0x0F0000u));
+        m.store32(pc + 8u, 0xC4000000u | blocks);
+        pc += 12u;
+        rt.cpu().set_gpr(4, static_cast<std::uint32_t>(id)); rt.cpu().set_gpr(5, pc);
+        rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+        // Reference: the original per-word algorithm.
+        const std::uint32_t bytes = std::min<std::uint32_t>(blocks * 32u, 1024u), words = bytes / 4u;
+        std::array<std::uint32_t, 256> clut{};
+        for (std::uint32_t i = 0; i < bytes; i += 4u) if (m.contains(address + i, 4u)) clut[i / 4u] = m.load32(address + i);
+        std::uint64_t h = 0x84222325CBF29CE4ull ^ words;
+        for (std::uint32_t i = 0; i < words; ++i) h = (h ^ clut[i]) * 0x100000001B3ull;
+        const auto &r = kernel.ge().registers();
+        return r.clut == clut && r.clut_words == words && r.clut_hash == h;
+    };
+    CHECK(load(kPal, 32u));              // full palette in RAM
+    const auto full_hash = kernel.ge().registers().clut_hash;
+    CHECK(load(kPal, 32u));              // the same bytes again: kept
+    CHECK(kernel.ge().registers().clut_hash == full_hash);
+    m.store32(kPal + 4u * 100u, m.load32(kPal + 4u * 100u) ^ 1u);
+    CHECK(load(kPal, 32u));              // one word changed
+    CHECK(kernel.ge().registers().clut_hash != full_hash);
+    CHECK(load(kPal, 2u));               // 16 words of the same data: the rest is zero
+    CHECK(load(kPal + 16u, 2u));         // shifted source
+    CHECK(load(ram_end - 32u, 4u));      // runs past the end of RAM: per-word fallback
+    CHECK(load(0x04100000u, 32u));       // VRAM palette
+    CHECK(load(0x04100000u, 32u));
+    CHECK(load(kPal, 0u));               // zero blocks: no words, hash of nothing
+    CHECK(load(kPal, 0u));
+    CHECK(load(kPal, 63u));              // more than 1 KiB requested: capped at 1 KiB
+    CHECK(!rt.stopped());
+}
+
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
 // 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
 void test_mpeg_avc_csc() {
@@ -1058,6 +1115,7 @@ int main() {
     test_refer_event_flag();
     test_mpeg_decode_ycbcr();
     test_ge_stall_timing();
+    test_ge_loadclut_fast_path();
     test_ge_stall_batching();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();

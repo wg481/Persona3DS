@@ -5,6 +5,7 @@
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/common.hpp"
 #include <algorithm>
+#include <bit> // P3P3DS: LOADCLUT fast path
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -276,8 +277,21 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
     case 0xC4: { // LOADCLUT: arg blocks of 32 bytes from CLUTADDR (+ upper bits)
         const auto address=(regs_.reg[0xB0]&0xFFFFF0u)|((regs_.reg[0xB1]&0x0F0000u)<<8);
         const auto bytes=std::min<std::uint32_t>((arg&0x3F)*32u,1024u);
+        // P3P3DS: a range inside guest RAM is read with one raw_pointer lookup and memcpy (guest and
+        // host words are little-endian) instead of contains + load32 per word, and a reload of the same
+        // bytes keeps the palette and its hash. Persona's dungeons load a palette for about every draw
+        // (about 10k/s), mostly unchanged; the per-word path cost about 40 us per load on the New 3DS
+        // (docs/CURRENT_STATE.md). Results are identical to the per-word path below.
+        static_assert(std::endian::native==std::endian::little);
+        const std::uint8_t *src=bytes!=0u ? mem.raw_pointer(address,bytes) : nullptr;
+        if(src!=nullptr) {
+            if(bytes/4u==regs_.clut_words && std::memcmp(regs_.clut.data(),src,bytes)==0) break; // same palette, same hash
+            regs_.clut.fill(0); regs_.clut_words=bytes/4u;
+            std::memcpy(regs_.clut.data(),src,bytes);
+        } else {
         regs_.clut.fill(0); regs_.clut_words=bytes/4u;
         for(std::uint32_t i=0;i<bytes;i+=4) if(mem.contains(address+i,4)) regs_.clut[i/4]=mem.load32(address+i);
+        }
         std::uint64_t h=0x84222325CBF29CE4ull^regs_.clut_words;
         for(std::uint32_t i=0;i<regs_.clut_words;++i) h=(h^regs_.clut[i])*0x100000001B3ull;
         regs_.clut_hash=h;
