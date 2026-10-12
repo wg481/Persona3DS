@@ -97,6 +97,37 @@ void test_ima() {
     check(media::ImaTrack::open((kTmp / "missing.wav").string()) == nullptr, "missing file: null");
 }
 
+// Read-ahead of a long IMA file: 6,000 stereo blocks of 24 bytes (144,000 bytes of data, three read
+// chunks); every frame of block b >= 1 is (1000 * (b + 1), -1000 * (b + 1)) as int16 (ima_wav).
+void test_ima_read_ahead() {
+    constexpr std::uint32_t kBlocks = 6000, kPer = 17;
+    write(kTmp / "long_ima.wav", ima_wav(2, kBlocks, kBlocks * kPer));
+    auto t = media::ImaTrack::open((kTmp / "long_ima.wav").string());
+    check(t != nullptr && t->samples() == kBlocks * kPer, "long IMA file opens");
+    if (t == nullptr) return;
+    const auto expect = [](std::uint64_t frame, int side) {
+        const auto b = static_cast<int>(frame / kPer);
+        return static_cast<std::int16_t>(side * 1000 * (b + 1));
+    };
+    std::vector<std::int16_t> out(2 * 2048);
+    std::uint64_t wrong = 0;
+    for (std::uint64_t pos = kPer; pos < kBlocks * kPer; pos += 2048) { // forward, as the game reads
+        const auto n = static_cast<std::uint32_t>(std::min<std::uint64_t>(2048, kBlocks * kPer - pos));
+        t->read_stereo(static_cast<std::int64_t>(pos), n, out.data());
+        for (std::uint32_t k = 0; k < n; ++k)
+            wrong += out[2 * k] != expect(pos + k, 1) || out[2 * k + 1] != expect(pos + k, -1);
+    }
+    check(wrong == 0, "forward 2048-frame reads across read chunks: every frame from its block (" + std::to_string(wrong) + " wrong)");
+    wrong = 0;
+    for (std::uint64_t pos : {5000ull * kPer + 3, 10ull * kPer, 3000ull * kPer + 16, 5999ull * kPer, 1ull * kPer + 1}) {
+        t->read_stereo(static_cast<std::int64_t>(pos), 1, out.data());
+        wrong += out[0] != expect(pos, 1) || out[1] != expect(pos, -1);
+    }
+    check(wrong == 0, "jumps backward and forward re-read the right blocks");
+    t->read_stereo(static_cast<std::int64_t>(kBlocks) * kPer - 1, 2, out.data());
+    check(out[0] == expect(kBlocks * kPer - 1, 1) && out[2] == 0 && out[3] == 0, "last frame, then silence past the end");
+}
+
 void test_index_and_atrac() {
     psprecomp::Runtime rt;
     auto &m = rt.memory();
@@ -295,6 +326,7 @@ int main() {
     std::filesystem::create_directories(kTmp);
     test_fnv();
     test_ima();
+    test_ima_read_ahead();
     test_index_and_atrac();
     test_movies();
     test_movie_read_ahead();
