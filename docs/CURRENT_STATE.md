@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Read-ahead confirmed: opening movie at 71 % (2026-10-11)
+
+- [VERIFIED] Maintainer's New 3DS on `5ba562d` (report label `8197d397`: incremental build without reconfigure), opening movie: maintainer sees about 40 fps; report whole run 42.7 game frames/s, 80 % of real time; last 10 s 71 % (55 % on `8197d397`), main core `aot 15 hle 81 idle 3`, GE `hash 0.0 tex 19.8`, `gpu thd: busy 21 wait 19.2`; MVD `hw 3.29 conv 2.29 ms; decode 6.25 ms (read 0.63), copy 2.60 ms per picture, 1.01 units per picture`. The SD reads were the 11 ms gap (decode 16.62 -> 6.25 ms); the game does not skip pictures. `audio ... 0 late`, no failed allocation.
+- To watch: heap in use 57,830 KiB (52,116 KiB on the previous runs) and linear free 17,074 KiB (20,909): [UNVERIFIED] cause; the read-ahead adds 256 KiB per playing movie, so most of the difference is [INFERRED] a different game state at quit (26.4 s of guest time, further into the game than earlier runs).
+- Open: about 40 % of the main core's time is HLE that is neither the GE wait (19 %) nor movie decode and copy (about 19 % at about 21 pictures/s). Next evidence: `sdmc:/persona3ds/profile_seconds.txt` (top imports per second in `profile_seconds.csv`) during the movie. Candidates for the GE side: the 1 MiB movie texture upload (about 9 ms per picture), e.g. tiling it with a GX display transfer (citro3d `C3D_SyncDisplayTransfer` queues it in order inside a frame, `renderqueue.c`).
+
 ## Write generation confirmed; movie stream read-ahead (2026-10-11)
 
 - [VERIFIED] Maintainer's New 3DS on `8197d397` (label now current), opening movie, last 10 s: speed 55 % (47 % on `b45dc61`), GE `hash` 0.0 % (17.9 %), `tex` 15.4 %, `gpu thd: busy 16 wait 14.9` (busy 30, wait 28.4), main core `hle 83 aot 11 idle 4`; whole run 73 % of real time, 35.4 game frames/s; `audio ... 0 late`; no failed allocation. The write-generation path removes the movie texture's hash as expected.
