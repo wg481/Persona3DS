@@ -193,6 +193,7 @@ struct TimeSample {
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
     double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
     double stall_calls{}, stall_ticks{};                  // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall
+    double front_draw{}, front_sync{};                    // Persona3DS: ticks in renderer draw() / sync() on the game's thread
     double vc_hits{}, vc_uses{};               // vertex cache hits / model draws that asked it
     double guest_us{}, hle_ns{}, render_ns{}, io_ns{}, io_bytes{}, hle_calls{};
     std::uint64_t vblanks{}, game_frames{};
@@ -236,6 +237,38 @@ p3p3ds::n3ds::GpuRenderer *g_gpu = nullptr;
 // Everything that touches citro3d goes through it: posted in order, or called
 // once the worker is idle.
 p3p3ds::ge::AsyncRenderer *g_async = nullptr;
+
+// Persona3DS profiling: exact (unsampled) time of the GE command processor's calls into the
+// renderer on the game's thread: draw() (with the GE worker: the hand-over of a draw and its
+// state) and sync() (end of every list execution). Report line "stall split".
+struct GeFrontTiming {
+    u64 draw_ticks{}, sync_ticks{};
+    std::uint64_t draws{}, syncs{};
+};
+GeFrontTiming g_ge_front;
+class TimedGeRenderer final : public p3p3ds::ge::GeRenderer {
+public:
+    explicit TimedGeRenderer(std::unique_ptr<p3p3ds::ge::GeRenderer> inner) : inner_(std::move(inner)) {}
+    void draw(psprecomp::GuestMemory &memory, const p3p3ds::ge::GeRegisters &regs, p3p3ds::ge::Prim prim, std::uint32_t count,
+              std::uint32_t vertex_address, std::uint32_t index_address) override {
+        const u64 start = svcGetSystemTick();
+        inner_->draw(memory, regs, prim, count, vertex_address, index_address);
+        g_ge_front.draw_ticks += svcGetSystemTick() - start;
+        ++g_ge_front.draws;
+    }
+    void transfer(psprecomp::GuestMemory &memory, const p3p3ds::ge::GeRegisters &regs) override { inner_->transfer(memory, regs); }
+    void sync() override {
+        const u64 start = svcGetSystemTick();
+        inner_->sync();
+        g_ge_front.sync_ticks += svcGetSystemTick() - start;
+        ++g_ge_front.syncs;
+    }
+    void drain() override { inner_->drain(); }
+    [[nodiscard]] const p3p3ds::ge::DrawStats &stats() const override { return inner_->stats(); }
+
+private:
+    std::unique_ptr<p3p3ds::ge::GeRenderer> inner_;
+};
 Thread g_gpu_thread = nullptr;
 bool start_gpu_thread(void (*entry)(void *), void *arg) {
     s32 priority = 0x30;
@@ -500,6 +533,8 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
     t.ge_cmds = static_cast<double>(p3p3ds::host_profile().ge_commands);
     t.stall_calls = static_cast<double>(p3p3ds::hle::ge_stall_timing().calls);
     t.stall_ticks = static_cast<double>(p3p3ds::hle::ge_stall_timing().units);
+    t.front_draw = static_cast<double>(g_ge_front.draw_ticks);
+    t.front_sync = static_cast<double>(g_ge_front.sync_ticks);
     t.vblanks = s.frames;
     t.game_frames = s.game_frames;
     return t;
@@ -573,6 +608,15 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         std::snprintf(buf, sizeof buf, " stall: %.1fk/s, GE work %.1f us per call\n", stalls / s.wall / 1000.0,
                       stalls > 0 ? (b.stall_ticks - a.stall_ticks) * kNsPerTick / 1000.0 / stalls : 0.0);
         text += buf;
+        // Persona3DS: per stall update, the GE work split into the renderer's draw() and sync() (exact)
+        // and the rest (command processing); all three in us per stall update over the last 10 s.
+        if (stalls > 0) {
+            const double per = kNsPerTick / 1000.0 / stalls;
+            const double draw_us = (b.front_draw - a.front_draw) * per, sync_us = (b.front_sync - a.front_sync) * per;
+            std::snprintf(buf, sizeof buf, " stall split: draw %.1f sync %.1f rest %.1f us\n", draw_us, sync_us,
+                          (b.stall_ticks - a.stall_ticks) * per - draw_us - sync_us);
+            text += buf;
+        }
         // Persona3DS: opcodes most often released per stall update (whole run; hex opcode:count per call).
         std::snprintf(buf, sizeof buf, " stall ops: %s\n", p3p3ds::hle::ge_stall_top_opcodes(7).c_str());
         text += buf;
@@ -931,9 +975,9 @@ int main() {
             hooks.clock = profile_ticks;
             auto async = std::make_unique<p3p3ds::ge::AsyncRenderer>(std::move(gpu), 1536u << 10, std::move(hooks));
             if (async->threaded()) g_async = async.get();
-            kernel.ge().set_renderer(std::move(async));
+            kernel.ge().set_renderer(std::make_unique<TimedGeRenderer>(std::move(async)));
         } else {
-            kernel.ge().set_renderer(std::move(gpu));
+            kernel.ge().set_renderer(std::make_unique<TimedGeRenderer>(std::move(gpu)));
         }
         stats.cores += g_async != nullptr ? ", GE on core2" : ", GE on core0";
         rt.memory().vram_write_observer = [](std::uint32_t address, std::size_t bytes) { gpu_note_cpu_write(address, bytes); };
