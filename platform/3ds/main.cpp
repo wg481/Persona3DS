@@ -190,6 +190,7 @@ struct TimeSample {
     u64 prep{}, vertex{}, uniform{}, submit{}; // GPU renderer steps (GpuStats)
     u64 fill{};                                // model vertices into the arena (part of vertex)
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
+    double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
     double vc_hits{}, vc_uses{};               // vertex cache hits / model draws that asked it
     double guest_us{}, hle_ns{}, render_ns{}, io_ns{}, io_bytes{}, hle_calls{};
     std::uint64_t vblanks{}, game_frames{};
@@ -479,6 +480,9 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
             const auto &a = g_async->async_stats();
             t.gpu_busy = a.busy.load(std::memory_order_relaxed);
             t.gpu_wait = a.drain_wait + a.full_wait;
+            t.ge_draws = static_cast<double>(a.draws);
+            t.ge_states = static_cast<double>(a.states);
+            t.ge_cluts = static_cast<double>(a.cluts);
         }
         const auto &c = g_gpu->vertex_cache_stats();
         t.vc_hits = static_cast<double>(c.hits);
@@ -491,6 +495,7 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
     t.render_ns = static_cast<double>(p3p3ds::host_profile().render_ns) * kNsPerTick;
     t.io_ns = static_cast<double>(p3p3ds::host_profile().io_ns) * kNsPerTick;
     t.io_bytes = static_cast<double>(p3p3ds::host_profile().io_bytes);
+    t.ge_cmds = static_cast<double>(p3p3ds::host_profile().ge_commands);
     t.vblanks = s.frames;
     t.game_frames = s.game_frames;
     return t;
@@ -550,6 +555,13 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
                           pct(ticks_to_s(b.gpu_wait - a.gpu_wait)));
         else
             std::snprintf(buf, sizeof buf, " gpu thd: off\n");
+        text += buf;
+        // Persona3DS: GE work per second: display-list commands executed on the game's thread, draws
+        // handed to the renderer, state snapshots and CLUT copies queued for the worker (the dungeon
+        // spends most of its time in sceGeListUpdateStallAddr: which part of it).
+        std::snprintf(buf, sizeof buf, " ge in: cmd %.1fk draw %.1fk st %.1fk clut %.1fk /s\n", (b.ge_cmds - a.ge_cmds) / s.wall / 1000.0,
+                      (b.ge_draws - a.ge_draws) / s.wall / 1000.0, (b.ge_states - a.ge_states) / s.wall / 1000.0,
+                      (b.ge_cluts - a.ge_cluts) / s.wall / 1000.0);
         text += buf;
     }
     return text;
