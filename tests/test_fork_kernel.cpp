@@ -2,6 +2,7 @@
 // checked against uOFW's semantics and dispatched through the runtime as the
 // game reaches them.
 #include "p3p3ds/hle/fork_kernel.hpp"
+#include "p3p3ds/hle/fork_movie.hpp"
 #include "p3p3ds/hle/hle_modules.hpp"
 #include "p3p3ds/kernel_state.hpp"
 #include "psprecomp/allegrex_context.hpp"
@@ -507,9 +508,16 @@ void test_mpeg_avc_csc() {
     CHECK(m.load32(kDest + (271u * 512u + 479u) * 4u) == 0xFF000000u);
     CHECK(m.load32(kDest + 480u * 4u) == 0x12345678u);                // outside the range: untouched
     CHECK(m.load32(kDest + (271u * 512u + 480u) * 4u) == 0x12345678u);
+    // Each converted picture records a write generation for the renderer (fork_movie.hpp).
+    std::uint64_t g1 = 0, g2 = 0;
+    CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g1) && g1 != 0u);
+    CHECK(csc(0u, 0u, 480u, 272u) == 0u);
+    CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g2) && g2 > g1);
+    p3p3ds::hle::media::forget_picture_writes();
     (void)csc(0u, 0u, 480u, 270u); // not a multiple of 16: reported
     CHECK(rt.stopped());
     CHECK(rt.stop_reason().find("sceMpegAvcCsc(mpeg 0x08CC268C, source 0x09000000, range 0x09FAE500, frameWidth 512") != std::string::npos);
+    CHECK(!p3p3ds::hle::media::picture_write_generation(kDest, 512u, g1)); // a reported call writes nothing
 }
 
 // sceKernelTerminateDeleteThread: pspautotests threads/threads/terminate

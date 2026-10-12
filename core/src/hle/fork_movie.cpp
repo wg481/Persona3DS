@@ -4,14 +4,24 @@
 #include "p3p3ds/hle/fork_media.hpp"
 #include "psprecomp/guest_memory.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 
 namespace p3p3ds::hle::media {
 namespace {
 
 VideoDecoderFactory g_factory;
 Movies g_movies;
+
+struct PictureWrite {
+    std::uint32_t address{}, stride{};
+    std::uint64_t generation{}; // 0: free slot
+};
+std::mutex g_writes_lock;
+std::array<PictureWrite, 4> g_writes{}; // Persona double-buffers its movie texture: 2 addresses
+std::uint64_t g_last_generation = 0;
 constexpr std::uint32_t kPsmfPrefixMax = 0x800u; // the PSMF header the game reads before the stream
 
 std::uint32_t le32(const std::uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | static_cast<std::uint32_t>(p[3]) << 24; }
@@ -78,6 +88,7 @@ std::shared_ptr<MovieTrack> Movies::bind(psprecomp::GuestMemory &m, std::uint32_
     // [INFERRED] one movie at a time: a new stream ends the previous ones (and frees their decoder,
     // the 3DS hardware decoder being a single session).
     playing_.clear();
+    forget_picture_writes();
     if (entries_.empty()) return nullptr;
     for (const auto &e : entries_) {
         if (e.prefix > kPsmfPrefixMax) continue;
@@ -123,5 +134,30 @@ bool Movies::next_audio(std::uint32_t handle, std::int16_t *out) {
 }
 
 Movies &fork_movies() noexcept { return g_movies; }
+
+void note_picture_write(std::uint32_t address, std::uint32_t stride) {
+    address = psprecomp::GuestMemory::canonical(address);
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    PictureWrite *slot = nullptr;
+    for (auto &w : g_writes)
+        if (w.generation != 0u && w.address == address) { slot = &w; break; }
+    if (slot == nullptr) // a free slot, else the least recently written
+        for (auto &w : g_writes)
+            if (slot == nullptr || w.generation < slot->generation) slot = &w;
+    *slot = {address, stride, ++g_last_generation};
+}
+
+bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation) {
+    address = psprecomp::GuestMemory::canonical(address);
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    for (const auto &w : g_writes)
+        if (w.generation != 0u && w.address == address && w.stride == stride) { generation = w.generation; return true; }
+    return false;
+}
+
+void forget_picture_writes() {
+    const std::lock_guard<std::mutex> lock(g_writes_lock);
+    g_writes = {};
+}
 
 } // namespace p3p3ds::hle::media

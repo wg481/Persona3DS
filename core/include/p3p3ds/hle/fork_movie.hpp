@@ -27,6 +27,7 @@ namespace psprecomp { class GuestMemory; }
 namespace p3p3ds::hle::media {
 
 class ImaTrack;
+void forget_picture_writes(); // below
 
 class VideoDecoder {
 public:
@@ -87,7 +88,7 @@ struct MovieStats {
 class Movies {
 public:
     void add_entry(MovieEntry e) { entries_.push_back(std::move(e)); ++stats_.entries; }
-    void clear() { entries_.clear(); playing_.clear(); stats_ = {}; }
+    void clear() { entries_.clear(); playing_.clear(); stats_ = {}; forget_picture_writes(); }
     // sceMpegQueryStreamOffset: (re)binds `handle` to the movie whose PSMF prefix matches.
     std::shared_ptr<MovieTrack> bind(psprecomp::GuestMemory &m, std::uint32_t handle, std::uint32_t header, const std::string &dir,
                                      std::string *name = nullptr);
@@ -98,7 +99,7 @@ public:
     // sceMpegAtracDecode: writes the next 2048 stereo samples of `handle` to `out`; false without converted audio.
     bool next_audio(std::uint32_t handle, std::int16_t *out);
     // sceMpegDelete: the instance's movie ends (its decoder is released).
-    void release(std::uint32_t handle) { playing_.erase(handle); }
+    void release(std::uint32_t handle) { playing_.erase(handle); forget_picture_writes(); }
     [[nodiscard]] bool playing() const noexcept { return !playing_.empty(); }
     [[nodiscard]] const MovieStats &stats() const noexcept { return stats_; }
     void add_copy_time(std::uint64_t us) noexcept { stats_.copy_us += us; }
@@ -116,5 +117,16 @@ private:
 };
 
 [[nodiscard]] Movies &fork_movies() noexcept;
+
+// Movie pictures written into guest memory (sceMpegAvcCsc), for the renderer: instead of hashing a
+// whole movie texture every frame to see whether it changed, it compares a write generation.
+// note_picture_write is called on the game's thread after a picture's rows were written (address of
+// the first texel of row 0, row stride in texels); picture_write_generation may be called from
+// another thread (the 3DS GE worker) and gives the generation of the last write at exactly that
+// address and stride. Generations only grow, across movies; forget_picture_writes (a movie ends or a
+// new one starts) drops every address, so their textures go back to content hashing.
+void note_picture_write(std::uint32_t address, std::uint32_t stride);
+[[nodiscard]] bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation);
+void forget_picture_writes();
 
 } // namespace p3p3ds::hle::media

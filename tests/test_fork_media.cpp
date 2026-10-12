@@ -231,6 +231,31 @@ void test_movies() {
     check(movies.next_audio(handle, pcm.data()), "no decoder: the audio still plays");
 }
 
+// Write generations of movie pictures (sceMpegAvcCsc -> 3DS renderer).
+void test_picture_writes() {
+    media::forget_picture_writes();
+    std::uint64_t g = 0, a1 = 0, a2 = 0, b1 = 0;
+    check(!media::picture_write_generation(0x08F58010u, 512u, g), "no write yet: no generation");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, a1) && a1 != 0u, "written address has a generation");
+    check(media::picture_write_generation(0x48F58010u, 512u, g) && g == a1, "uncached mirror is the same address");
+    check(!media::picture_write_generation(0x08F58010u, 480u, g), "other stride: no generation");
+    check(!media::picture_write_generation(0x08F58020u, 512u, g), "other address: no generation");
+    media::note_picture_write(0x08ED0010u, 512u); // Persona's second movie texture
+    check(media::picture_write_generation(0x08ED0010u, 512u, b1) && b1 > a1, "second buffer: newer generation");
+    check(media::picture_write_generation(0x08F58010u, 512u, g) && g == a1, "first buffer unchanged by the second");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, a2) && a2 > b1, "rewrite: generation grows");
+    for (std::uint32_t k = 0; k < 4; ++k) media::note_picture_write(0x09000000u + k * 0x100000u, 512u);
+    check(!media::picture_write_generation(0x08ED0010u, 512u, g), "four newer addresses evict the oldest");
+    media::forget_picture_writes();
+    check(!media::picture_write_generation(0x09000000u, 512u, g), "forget drops every address");
+    media::note_picture_write(0x08F58010u, 512u);
+    check(media::picture_write_generation(0x08F58010u, 512u, g) && g > a2, "generations keep growing after forget");
+    media::fork_movies().release(0x12345678u);
+    check(!media::picture_write_generation(0x08F58010u, 512u, g), "a movie ending (sceMpegDelete) forgets the writes");
+}
+
 } // namespace
 
 int main() {
@@ -239,6 +264,7 @@ int main() {
     test_ima();
     test_index_and_atrac();
     test_movies();
+    test_picture_writes();
     std::cout << "fork media failures=" << failures << "\n";
     return failures ? 1 : 0;
 }

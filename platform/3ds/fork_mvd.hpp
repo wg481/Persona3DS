@@ -58,6 +58,7 @@ public:
     bool decode(const std::uint8_t *au, std::size_t size, std::uint32_t *rgba, std::uint32_t width, std::uint32_t height) override {
         if (!ready_) return false;
         bool slice = false;
+        const u64 hw_start = svcGetSystemTick(); // Persona3DS: hardware (process + render) vs CPU conversion time
         const auto start_code = [&](std::size_t from) {
             for (std::size_t k = from; k + 3 <= size; ++k)
                 if (au[k] == 0 && au[k + 1] == 0 && au[k + 2] == 1) return k;
@@ -82,6 +83,8 @@ public:
         const Result r = mvdstdRenderVideoFrame(&config_, true);
         if (r != MVD_STATUS_OK) { note_error("render", r); return false; }
         GSPGPU_InvalidateDataCache(out_, width_ * height_ * 2u);
+        const u64 conv_start = svcGetSystemTick();
+        hw_ticks_ += conv_start - hw_start;
         const std::uint32_t w = width < width_ ? width : width_, h = height < height_ ? height : height_;
         if (lut_.empty()) { // red-high 565 (MVD_OUTPUT_BGR565) -> PSP 8888, one lookup per pixel (256 KiB)
             lut_.resize(65536);
@@ -95,9 +98,17 @@ public:
             std::uint32_t *dst = rgba + y * width;
             for (std::uint32_t x = 0; x < w; ++x) dst[x] = lut_[src[x]];
         }
+        conv_ticks_ += svcGetSystemTick() - conv_start;
+        ++timed_;
         return true;
     }
-    [[nodiscard]] std::string status() const override { return status_; }
+    [[nodiscard]] std::string status() const override {
+        if (timed_ == 0u) return status_;
+        char text[64]; // per picture: MVD process + render (includes waiting for the decoder), RGB565 -> 8888 table
+        const double ms = 1000.0 / static_cast<double>(SYSCLOCK_ARM11) / static_cast<double>(timed_);
+        std::snprintf(text, sizeof text, "; hw %.2f conv %.2f ms", static_cast<double>(hw_ticks_) * ms, static_cast<double>(conv_ticks_) * ms);
+        return status_ + text;
+    }
 
 private:
     static constexpr std::size_t kInBytes = 0x80000;
@@ -116,6 +127,8 @@ private:
     bool ready_{};
     std::string status_;
     std::vector<std::uint32_t> lut_;
+    u64 hw_ticks_{}, conv_ticks_{};
+    std::uint64_t timed_{};
 };
 
 inline void install_mvd_decoder() {

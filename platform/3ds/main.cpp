@@ -606,7 +606,7 @@ std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::Ke
     const u64 now = osGetTime();
     const double wall = static_cast<double>(now - s.start_ms) / 1000.0;
     const double guest = static_cast<double>(k.threads().now()) / 1e6;
-    char buf[1536];
+    char buf[2048]; // Persona3DS: was 1536; a movie report with every line is about 1,500 characters
     std::snprintf(buf, sizeof buf,
         "%s - %s (%s)\n"
         "static recompilation port\n"

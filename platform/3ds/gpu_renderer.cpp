@@ -8,6 +8,7 @@
 
 #include "ge_shbin.h"
 #include "psprecomp/guest_memory.hpp"
+#include "p3p3ds/hle/fork_movie.hpp" // P3P3DS: movie picture write generations
 
 #include <algorithm>
 #include <cmath>
@@ -80,31 +81,6 @@ std::uint32_t tiled_index(std::uint32_t x, std::uint32_t y, std::uint32_t w) {
 // RGBA (r in the low byte) -> PICA texel formats.
 std::uint32_t to_rgba8(std::uint32_t c) {
     return ((c & 0xFFu) << 24) | (((c >> 8) & 0xFFu) << 16) | (((c >> 16) & 0xFFu) << 8) | (c >> 24);
-}
-
-// P3P3DS: change detection for large textures with 32-bit operations only (the ARM11 has no 64-bit
-// multiply instruction; ge::texture_hash does one per 8 bytes). Four independent lanes of
-// multiply-rotate rounds over 16-byte stripes, folded into two differently mixed 32-bit halves.
-std::uint64_t hash_bytes32(const std::uint8_t *p, std::size_t n) {
-    constexpr std::uint32_t P1 = 2654435761u, P2 = 2246822519u, P3 = 3266489917u, P4 = 668265263u, P5 = 374761393u;
-    const auto rotl = [](std::uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
-    const auto load = [](const std::uint8_t *q) { std::uint32_t v; std::memcpy(&v, q, 4); return v; };
-    std::uint32_t a = P1 + P2, b = P2, c = 0u, d = 0u - P1;
-    std::size_t i = 0;
-    for (; i + 16u <= n; i += 16u) {
-        a = rotl(a + load(p + i) * P2, 13) * P1;
-        b = rotl(b + load(p + i + 4u) * P2, 13) * P1;
-        c = rotl(c + load(p + i + 8u) * P2, 13) * P1;
-        d = rotl(d + load(p + i + 12u) * P2, 13) * P1;
-    }
-    std::uint32_t h = rotl(a, 1) + rotl(b, 7) + rotl(c, 12) + rotl(d, 18) + static_cast<std::uint32_t>(n);
-    for (; i + 4u <= n; i += 4u) h = rotl(h + load(p + i) * P3, 17) * P4;
-    for (; i < n; ++i) h = rotl(h + p[i] * P5, 11) * P1;
-    const auto avalanche = [](std::uint32_t x) {
-        x ^= x >> 15; x *= 2246822519u; x ^= x >> 13; x *= 3266489917u; return x ^ (x >> 16);
-    };
-    const std::uint32_t lo = avalanche(h), hi = avalanche(h ^ rotl(a ^ c, 5) ^ rotl(b ^ d, 21) ^ P5);
-    return static_cast<std::uint64_t>(hi) << 32 | lo;
 }
 
 // P3P3DS: PSP 8888 rows (r in the low byte, `stride` bytes apart) -> a PICA RGBA8 texture of tw x th
@@ -528,14 +504,13 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
         ++gpu_stats_.texture_hits;
     } else {
         const u64 hash_start = svcGetSystemTick();
-        // P3P3DS: large plain 8888 textures (Persona's 1 MiB movie texture, checked every frame: GE hash
-        // 14.3 % of the time) use a hash made of 32-bit operations; whether a texture takes this path
-        // depends only on fields of its cache key, so one entry is always compared with the same hash.
-        const std::size_t span8888 = static_cast<std::size_t>(info.stride) * 4u * (info.height - 1u) + info.width * 4u;
-        const std::uint8_t *plain = info.format == 3u && !info.swizzled && info.width >= 8u && info.height >= 8u && span8888 >= 0x10000u
-                                        ? memory.raw_pointer(info.address, span8888)
-                                        : nullptr;
-        const std::uint64_t hash = plain != nullptr ? hash_bytes32(plain, span8888) : ge::texture_hash(memory, regs, info);
+        // P3P3DS: a movie picture texture written by sceMpegAvcCsc (Persona's 1 MiB movie texture, checked
+        // every frame: GE hash 12-18 % of the time, bound by memory reads) is compared by its write
+        // generation instead of a hash of its contents (fork_movie.hpp note_picture_write).
+        std::uint64_t generation = 0;
+        const std::uint64_t hash = info.format == 3u && !info.swizzled && hle::media::picture_write_generation(info.address, info.stride, generation)
+                                       ? 0x4D4F564945000000ull ^ (generation * 0x9E3779B97F4A7C15ull)
+                                       : ge::texture_hash(memory, regs, info);
         gpu_stats_.hash_ticks += svcGetSystemTick() - hash_start;
         if (it != textures_.end() && it->second.hash == hash) {
             it->second.checked_frame = frame_;
