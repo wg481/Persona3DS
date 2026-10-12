@@ -46,6 +46,7 @@
 #include <3ds.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <deque>
@@ -627,6 +628,25 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
                           (b.stall_ticks - a.stall_ticks) * per - draw_us - sync_us);
             text += buf;
         }
+        // Persona3DS: sampled cost of each GE opcode's execute() (HostProfile::ge_op_units, every 16th
+        // command), the most expensive six in us per stall update over the whole run (PRIM includes the
+        // renderer's draw()).
+        {
+            const auto &hp = p3p3ds::host_profile();
+            const double calls = static_cast<double>(p3p3ds::hle::ge_stall_timing().calls);
+            std::array<unsigned, 256> order{};
+            for (unsigned i = 0; i < 256u; ++i) order[i] = i;
+            std::stable_sort(order.begin(), order.end(), [&hp](unsigned x, unsigned y) { return hp.ge_op_units[x] > hp.ge_op_units[y]; });
+            std::string ops;
+            for (unsigned k = 0; k < 6u && calls > 0 && hp.ge_op_units[order[k]] != 0u; ++k) {
+                char item[24];
+                std::snprintf(item, sizeof item, "%s%02X:%.1f", ops.empty() ? "" : " ", order[k],
+                              static_cast<double>(hp.ge_op_units[order[k]]) * kNsPerTick / 1000.0 / calls);
+                ops += item;
+            }
+            std::snprintf(buf, sizeof buf, " op cost: %s us/update\n", ops.c_str());
+            text += buf;
+        }
         // Persona3DS: opcodes most often released per stall update (whole run; hex opcode:count per call).
         std::snprintf(buf, sizeof buf, " stall ops: %s\n", p3p3ds::hle::ge_stall_top_opcodes(7).c_str());
         text += buf;
@@ -975,13 +995,14 @@ int main() {
         }
         // GE back end on core 2 when the probe found a parallel core 2;
         // sdmc:/persona3ds/no_gpu_thread.txt keeps it on the game's thread (A/B runs).
-        // Persona3DS: sceGeListUpdateStallAddr batching (fork_kernel.hpp), up to 32 updates per run of
-        // the GE; sdmc:/persona3ds/no_ge_batch.txt runs every update at once (A/B runs).
+        // Persona3DS: sceGeListUpdateStallAddr batching (fork_kernel.hpp), off by default: on hardware it
+        // did not lower the GE work per update (docs/CURRENT_STATE.md). sdmc:/persona3ds/ge_batch.txt
+        // turns it on (up to 32 updates per run of the GE) for comparisons.
         {
-            unsigned batch = 32u;
-            if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_ge_batch.txt", "r")) { batch = 0u; std::fclose(f); }
+            unsigned batch = 0u;
+            if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/ge_batch.txt", "r")) { batch = 32u; std::fclose(f); }
             p3p3ds::hle::set_ge_stall_batching(batch);
-            stats.cores += batch != 0u ? "" : ", no GE batch";
+            stats.cores += batch != 0u ? ", GE batch" : "";
         }
         bool gpu_thread = stats.cores.rfind("core2 ok", 0) == 0;
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_gpu_thread.txt", "r")) { gpu_thread = false; std::fclose(f); }

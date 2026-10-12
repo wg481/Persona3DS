@@ -4,6 +4,7 @@
 // (VFS sources; they run inside HLE calls). HLE time is kept by
 // psprecomp::runtime_profile(). Off by default: no clock reads.
 #include <chrono>
+#include <array>
 #include <cstdint>
 
 namespace p3p3ds {
@@ -19,6 +20,10 @@ struct HostProfile {
     std::uint64_t render_ns{}, render_calls{};
     std::uint64_t io_ns{}, io_calls{}, io_bytes{};
     std::uint64_t ge_commands{}; // GE display-list commands executed (counted always, one add per command)
+    // P3P3DS: sampled cost per GE opcode (every 16th command's GeManager::execute timed, in clock
+    // units scaled by 16), to find what the dungeon's 44 us per stall update is spent on.
+    std::array<std::uint64_t, 256> ge_op_units{};
+    std::uint32_t ge_op_sample{};
     // Guest time between a list enqueue and the game's next wait for the GE
     // (sceGeDrawSync / sceGeListSync mode 0): what a GE back end on another
     // core could overlap. And the GE finish callbacks' own guest code.

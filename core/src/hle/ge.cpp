@@ -325,7 +325,14 @@ void GeManager::pump(psprecomp::Runtime &rt) {
                 if(l.previous==0x0F) { renderer_->sync(); deliver_finish_callback(rt,l,l.pc); }
                 break;
             }
-            execute(rt,l,word);
+            { // P3P3DS: every 16th command timed per opcode (HostProfile::ge_op_units)
+                auto &hp=host_profile();
+                if(hp.enabled && (++hp.ge_op_sample&15u)==0u) {
+                    const auto t0=profile_now(hp);
+                    execute(rt,l,word);
+                    hp.ge_op_units[op]+=(profile_now(hp)-t0)<<4;
+                } else execute(rt,l,word);
+            }
             l.previous=op;
             if(rt.stopped() || queue_.empty() || queue_.front()!=id) break;
         }
