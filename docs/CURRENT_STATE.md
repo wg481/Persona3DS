@@ -2,6 +2,16 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Pacing: the deficit is capped at two vblanks, not cleared (2026-10-13)
+
+- [VERIFIED] Maintainer's New 3DS on `2d1ce936` (label `595ea75e`), school dungeon, `profile_seconds.csv` rows 37-64 (wall 37-66 s): 31-43 vblank/s, 21-28 game frames/s, speed 51-70 %, main core `aot 44-53 hle 19-25 ge 11-17 idle 7-15`; report last 10 s 59 %, `idle 12`. `idle` is only the pacing sleep (`stats.idle_ticks`, `platform/3ds/main.cpp`), so the main core slept 12 % of the time while the game ran at 59 % of real time. Opening movie: about 49.9 fps (maintainer).
+- [VERIFIED] cause, by the code: `2d1ce936` reset the reference to "no deficit" once the guest was more than one vblank behind, so the next cheap vblank (the game shows a frame on two of three vblanks) found the guest ahead and slept. Its message said "catches up one vblank at most"; the code caught up none. [WRONG] that rule as written.
+- [INFERRED] the drop from 80 % (`57b13f3f`) to 59 % is not all pacing: draws per vblank also rose from 319 to 385 (15.3k draws at 47.6 vblank/s, now 14.9k at 39), i.e. a heavier view, while draws per wall second stayed level (the main core is bound by per-draw cost).
+- Change: behind by more than two vblanks (33,367 us, one 30 fps game frame), the reference moves so the guest stays exactly two vblanks behind; the deficit is kept, so cheap vblanks absorb it instead of sleeping, and a catch-up never exceeds two vblanks.
+- [VERIFIED] host simulation (`.tmp/pacesim/sim2.py`, untracked; per-vblank host cost patterns in ms, guest 16.683 ms per vblank): `[40,2]` 50 ms rule 74.3 % idle 6.5, cleared (`2d1ce936`) 58.9 % idle 25.9, capped at 2 vblanks 79.4 % idle 0.0; `[30,30,2]` 74.8 / 65.3 / 80.7 %; `[60,1,1]` 64.4 / 53.6 / 80.7 %; `[12,12,12,40]` 83.9 / - / 87.8 %. Fastest 6-vblank stretch never above 100 % with the cap.
+- [UNVERIFIED] on the New 3DS: dungeon `idle` near 0 while below 100 % speed, and speed up by about the idle share.
+- Sound in the same run: `2038 blocks, 0 late, 206566 skipped, 49258 overflow, 527 gaps`. Below real time the virtual clock is slower than the DSP, so gaps are expected by design ([VERIFIED] `fork_ndsp.hpp` `pump`); [UNVERIFIED] where the overflow (data more than 1.49 s past the cursor) comes from.
+
 ## LOADCLUT fix confirmed (dungeon near 30 fps); pacing catch-up and sound skips (2026-10-11)
 
 - [VERIFIED] Maintainer's New 3DS on `57b13f3f` (label `595ea75e`), school dungeon: "certainly starting to feel better"; report whole run 31.9 game frames/s at 47 vblank/s, 93 % of real time (target 30 fps); last 10 s 80 % (43 % before), main core `aot 51 hle 25 ge 17 idle 7` (was `aot 31 hle 54 ge 11`), `ge in: cmd 244.1k draw 15.3k /s` (more work done per second), `gpu thd: busy 52 wait 0.4`. The game's own code is now the largest share. Still choppy to the maintainer: speed readings sometimes above 100 %, and frames uneven around 30 fps. Report `audio ... 498164 skipped, 384 gaps` (about 11 s of 69 s skipped).

@@ -1140,10 +1140,11 @@ int main() {
                     svcSleepThread(static_cast<s64>(ahead_us * 1000.0));
                     stats.idle_ticks += svcGetSystemTick() - sleep_start;
                 }
-                // Persona3DS: behind by more than one vblank: continue from here instead of racing to catch
-                // up (was 50 ms). Catch-up bursts ran the game above real time (report speed over 100 %),
-                // delivered frames unevenly and pushed the virtual clock ahead of the sound.
-                else if (ahead_us < -16683.0) wall_minus_guest_us = wall_us - guest_us;
+                // Persona3DS: never more than two vblanks (one 30 fps game frame) behind: the deficit is
+                // capped there, not cleared. Clearing it (2d1ce936) made the cheap vblank after a slow one
+                // sleep while behind real time: school dungeon idle 12 % at 59 % speed. The 50 ms rule
+                // before that let catch-up bursts run the game above real time.
+                else if (ahead_us < -33367.0) wall_minus_guest_us = wall_us - guest_us - 33367.0;
             }
             const u64 present_start = svcGetSystemTick();
             gpu_present(rt.memory(), fb);
