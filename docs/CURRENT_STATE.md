@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Movie decoder retry confirmed; points and lines drawn (name-entry cursor) (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `dace0196` (branch `claude/movie-decoder-memory`), new game to past the hospital, 957 s: the Philemon and hospital cutscenes play ("linked properly"), battles work; report `movies : 44 converted, 6 matched, 0 unmatched, 6971 pictures, 5027 audio, 0 failed`, `mvd init 00000000 work 3063 KiB, linear free 1756 KiB` (linear memory left after the last decoder start); whole run 99 % of real time. Remaining visible problem (maintainer): the UI cursor is missing during name entry.
+- [VERIFIED] same report: `gpu : draws 5511631 ... skip 51240`; by the code, `GpuRenderer::draw` returned at once for `Points`, `Lines` and `LineStrip` (counted as skipped), and the PSP software renderer has no line path either. [INFERRED] the name-entry cursor is drawn with one of them (not yet confirmed by a trace).
+- Change (`platform/3ds/gpu_renderer.cpp`): points become a 1x1-pixel quad at the point, line segments a quad one pixel wide centred on the pixels they pass through (`segment`), both on the CPU vertex path (never the batched model path) and never culled; flat shading uses the last vertex's colour, as for triangles. Report `gpu : ... skip N lines L` counts the point/line draws.
+- [UNVERIFIED] on the New 3DS: the name-entry cursor shows, `skip` near 0 and `lines` near the former skip count.
+
 ## Hospital cutscene black: the movie decoder could not get linear memory (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on master `45f2d840`, 231 s of play up to the hospital (maintainer: "another missing cutscene in the hospital"): report `movies : 44 converted, 2 matched, 0 unmatched, 64 pictures, 666 audio, 854 failed` and `mvd init ffffffff work 3063 KiB; ... 14.34 units per picture`: the second movie matched its converted file but its decoder never started, so every picture failed and stayed black (audio played). `linear free : 5237 KiB` at the end, `tex 121` cached textures.

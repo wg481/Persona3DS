@@ -34,6 +34,7 @@ namespace p3p3ds::n3ds {
 
 struct GpuStats {
     std::uint64_t draws{}, triangles{}, skipped_prims{}, texture_uploads{}, texture_hits{}, texture_bytes{};
+    std::uint64_t line_prims{}; // P3P3DS: point / line / line-strip draws, drawn as 1-pixel quads
     std::uint64_t target_textures{}, cpu_presents{}, gpu_presents{}, cpu_to_target{}, frame_flushes{};
     std::uint64_t skipped_presents{}; // nothing new to show: no GPU frame, no buffer swap
     std::uint64_t model_draws{}, model_vertices{}; // transform-mode draws done by the vertex shader

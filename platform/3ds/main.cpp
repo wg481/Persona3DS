@@ -470,15 +470,15 @@ void write_bmp(const char *path, const std::vector<std::uint8_t> &rgb, std::uint
 std::string gpu_text() {
     if (g_gpu == nullptr) return {};
     const auto &g = g_gpu->gpu_stats();
-    char buf[384];
+    char buf[448]; // Persona3DS: was 384 (line count added)
     std::snprintf(buf, sizeof buf,
-        "gpu    : draws %llu tris %llu skip %llu\n"
+        "gpu    : draws %llu tris %llu skip %llu lines %llu\n"
         "         tex %lu up %llu hit %llu rtt %llu\n"
         "         present gpu %llu cpu %llu same %llu\n"
         "         flush cmd %llu arena %llu w/draw %llu\n"
         "movie  : skip %llu rtt %llu merge %lluk>%lluk f%lluk\n",
         static_cast<unsigned long long>(g.draws), static_cast<unsigned long long>(g.triangles),
-        static_cast<unsigned long long>(g.skipped_prims), static_cast<unsigned long>(g.textures),
+        static_cast<unsigned long long>(g.skipped_prims), static_cast<unsigned long long>(g.line_prims), static_cast<unsigned long>(g.textures),
         static_cast<unsigned long long>(g.texture_uploads), static_cast<unsigned long long>(g.texture_hits),
         static_cast<unsigned long long>(g.target_textures), static_cast<unsigned long long>(g.gpu_presents),
         static_cast<unsigned long long>(g.cpu_presents), static_cast<unsigned long long>(g.skipped_presents),

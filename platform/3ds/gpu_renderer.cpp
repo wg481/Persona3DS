@@ -761,7 +761,9 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
                        std::uint32_t vertex_address, std::uint32_t index_address) {
     ++draw_stats_.prims;
     draw_stats_.vertices += count;
-    if (prim == ge::Prim::Points || prim == ge::Prim::Lines || prim == ge::Prim::LineStrip) { ++gpu_stats_.skipped_prims; return; }
+    // P3P3DS: points and lines were skipped (report `skip`, 51,240 over a 16-minute run with the name-entry
+    // cursor missing); they are now drawn as 1-pixel quads on the CPU path below.
+    const bool lines = prim == ge::Prim::Points || prim == ge::Prim::Lines || prim == ge::Prim::LineStrip;
     const std::uint32_t color_address = 0x04000000u | (r24(regs, 0x9C) & 0x1FFFF0u);
     const std::uint32_t stride = r24(regs, 0x9D) & 0x7FCu;
     if (stride == 0u) return;
@@ -850,7 +852,7 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
         r24(regs, 0xC9), r24(regs, 0xCA), regs.reg[0x22] & 1u, r24(regs, 0xDB), regs.reg[0x21] & 1u, r24(regs, 0xDF),
         r24(regs, 0xE0), r24(regs, 0xE1), r24(regs, 0xE8), regs.reg[0x23] & 1u, r24(regs, 0xDE), r24(regs, 0xE7),
         regs.reg[0x1D] & 1u, r24(regs, 0x9B), layout.through ? 1u : 0u, r24(regs, 0xD3), tex != nullptr ? 1u : 0u,
-        sprites ? 1u : 0u, r24(regs, 0xD4), r24(regs, 0xD5)};
+        sprites || lines ? 1u : 0u, r24(regs, 0xD4), r24(regs, 0xD5)}; // P3P3DS: lines, like sprites, are never culled
 
     // Transform-mode triangles go through the vertex shader and are batched:
     // a draw whose state and uniforms equal the pending batch's only adds
@@ -917,7 +919,7 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     flush_batch();
     if (tex != nullptr) set_texture_params(tex, regs);
     if (!state_valid_ || key != frag_key_) {
-        apply_fragment_state(regs, tex != nullptr, clear_mode, sprites);
+        apply_fragment_state(regs, tex != nullptr, clear_mode, sprites || lines); // P3P3DS: quads of lines face either way
         frag_key_ = key;
     }
     bool rebound = false; // P3P3DS: draw trace (whether this draw issued C3D_TexBind)
@@ -978,6 +980,9 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     std::uint32_t capacity = 0;
     switch (prim) {
     case ge::Prim::Sprites: capacity = count / 2u * 6u; break;
+    case ge::Prim::Points: capacity = count * 6u; break;                            // P3P3DS
+    case ge::Prim::Lines: capacity = count / 2u * 6u; break;                        // P3P3DS
+    case ge::Prim::LineStrip: capacity = count >= 2u ? (count - 1u) * 6u : 0u; break; // P3P3DS
     case ge::Prim::Triangles: capacity = count / 3u * 3u; break;
     default: capacity = count >= 3u ? (count - 2u) * 3u : 0u; break;
     }
@@ -986,7 +991,43 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     out = alloc_vertices(capacity, first);
     if (out == nullptr) { ++gpu_stats_.skipped_prims; return; }
     const auto &v = screen_;
+    // P3P3DS: a segment as a quad one pixel wide, centred on the pixels it passes through; a point as the
+    // pixel it names. Flat shading takes the last vertex's colour, as for triangles.
+    auto segment = [&](const ge::ScreenVertex &a, const ge::ScreenVertex &b) {
+        if (a.clipped || b.clipped) return;
+        float dx = b.x - a.x, dy = b.y - a.y;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-4f) { dx = 1.0f; dy = 0.0f; len = 1.0f; }
+        const float nx = -dy / len * 0.5f, ny = dx / len * 0.5f;
+        const float ax = a.x + 0.5f, ay = a.y + 0.5f, bx = b.x + 0.5f, by = b.y + 0.5f;
+        const auto &ca = flat ? b.color : a.color;
+        put(a, ax + nx, ay + ny, a.z, a.u, a.v, ca);
+        put(b, bx + nx, by + ny, b.z, b.u, b.v, b.color);
+        put(a, ax - nx, ay - ny, a.z, a.u, a.v, ca);
+        put(a, ax - nx, ay - ny, a.z, a.u, a.v, ca);
+        put(b, bx + nx, by + ny, b.z, b.u, b.v, b.color);
+        put(b, bx - nx, by - ny, b.z, b.u, b.v, b.color);
+    };
+    if (lines) ++gpu_stats_.line_prims;
     switch (prim) {
+    case ge::Prim::Points:
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const auto &a = v[i];
+            if (a.clipped) continue;
+            put(a, a.x, a.y, a.z, a.u, a.v, a.color);
+            put(a, a.x + 1.0f, a.y, a.z, a.u, a.v, a.color);
+            put(a, a.x, a.y + 1.0f, a.z, a.u, a.v, a.color);
+            put(a, a.x, a.y + 1.0f, a.z, a.u, a.v, a.color);
+            put(a, a.x + 1.0f, a.y, a.z, a.u, a.v, a.color);
+            put(a, a.x + 1.0f, a.y + 1.0f, a.z, a.u, a.v, a.color);
+        }
+        break;
+    case ge::Prim::Lines:
+        for (std::uint32_t i = 0; i + 1 < count; i += 2) segment(v[i], v[i + 1]);
+        break;
+    case ge::Prim::LineStrip:
+        for (std::uint32_t i = 0; i + 1 < count; ++i) segment(v[i], v[i + 1]);
+        break;
     case ge::Prim::Sprites:
         for (std::uint32_t i = 0; i + 1 < count; i += 2) {
             const auto &a = v[i], &b = v[i + 1];
