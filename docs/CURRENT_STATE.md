@@ -2,6 +2,11 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Name-entry cursor confirmed; next: game code compile flags (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `38b9e8cb` (branch `claude/movie-decoder-memory`), 334 s including name entry: the cursor shows; report `gpu : draws 1137573 tris 2303946 skip 0 lines 19856` (skip 51,240 before), whole run 99 %, `movies : 4 matched ... 0 failed`. Maintainer: everything else works; what is left is the speed of first-person dungeon crawling.
+- Where the dungeon's main-core time is (runs of 2026-10-14 on `25382443`): game code (`aot`) 59-77 %, `sceGeDrawSync` (waiting for core 2) up to about 15 %, core 2 46-80 % busy. [VERIFIED] by the code (`platform/3ds/CMakeLists.txt` `P3P_AOT_OPT`): the generated game code is compiled with `-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2`, chosen for code size and compile time; `docs/3DS_PLATFORM.md` 8.5 records its run-time speed as [UNVERIFIED], and `-O2` at +17 % `.text` on the largest unit (309,801 -> 363,698 bytes, P3P). [INFERRED] the ARM11 is an in-order core, so instruction scheduling (switched off) matters for loads used right away. Next: one hardware run with `-DP3P_AOT_OPT=-O2` (cache variable, no code change) to measure dungeon speed, `.3dsx` size and heap.
+
 ## Movie decoder retry confirmed; points and lines drawn (name-entry cursor) (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `dace0196` (branch `claude/movie-decoder-memory`), new game to past the hospital, 957 s: the Philemon and hospital cutscenes play ("linked properly"), battles work; report `movies : 44 converted, 6 matched, 0 unmatched, 6971 pictures, 5027 audio, 0 failed`, `mvd init 00000000 work 3063 KiB, linear free 1756 KiB` (linear memory left after the last decoder start); whole run 99 % of real time. Remaining visible problem (maintainer): the UI cursor is missing during name entry.
