@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Pacing fix confirmed; comparing state words was slower on the 3DS, writes are marked instead (2026-10-13)
+
+- [VERIFIED] Maintainer's New 3DS on `66bd1bc8` (label `595ea75e`): opening movie 51.4 fps (49.9 before); school dungeon `profile_seconds.csv` rows 51-84: `idle` 0 in every second (7-15 on `2d1ce936`), 16.0-18.4k stall updates/s (14.0-16.7k), speed 49-81 %; report last 10 s 65 % (59 %), `aot 53 hle 24 ge 22 idle 0`, `ge in: draw 16.4k /s`, `gpu thd: busy 46 wait 0.1`. The pacing fix removed the sleep while behind as expected.
+- [VERIFIED] main-core GE time per draw rose: `ge` (render_ns, sampled around `renderer_->draw`, i.e. `AsyncRenderer::draw` on the game's thread) 16 % at 14.9k draws/s = 10.7 us per draw on `2d1ce936`, 22 % at 16.4k = 13.4 us on `66bd1bc8`; `aot` and `hle` per draw unchanged (48 % at 14.9k and 53 % at 16.4k draws/s: 32 us per draw both; `hle` 15 us both). [WRONG] "the ARM11 gain is larger than on x86": comparing 404 words with 51 `memcmp` calls per state change cost more on the New 3DS than the two 1.6 KB copies it replaced, though it was faster on x86.
+- Change: `GeRegisters` gets `dirty` (one bit per state word, `mutable`) and `dirty_tracked`; `GeManager::execute` (`core/src/hle/ge.cpp`) marks `reg[op]` for every command and each bone/world/view/proj/tgen word it writes; `AsyncRenderer::push_state` sends exactly the marked words (current values) and clears the bits: cost proportional to the words written, no pass over the register file. Unmarked writers (`dirty_tracked` clear) keep the compare path. [VERIFIED] audit of `ge.cpp`: `execute` line `regs_.reg[op]=arg`, `0x2A` and the five matrix-data cases are the only writes to those fields.
+- [VERIFIED] host tests (CTest 29/29): `test_fork_kernel` `test_ge_marked_state_through_queue` runs 300 stall updates of random display lists (matrix selects/data, plain registers, a draw every few commands; over 500 draws) through the real HLE import and `GeManager`, once into a direct renderer and once through a threaded `AsyncRenderer`: identical registers, matrices and versions at every draw; with the `view` mark removed from `ge.cpp` it fails. `p3p_ge_geometry` also replays with marked writes (skipping words past `reg` fails it).
+- [VERIFIED] host benchmark (`.tmp/asyncbench/bench3.cpp`, game thread alone, best of 10): full copies 0.301 us per draw, compare 0.202, marked 0.103.
+- [UNVERIFIED] on the New 3DS: dungeon `ge` well below 16 % (it was 16 % with the copies).
+
 ## GE hand-over sends changed state words only (2026-10-13)
 
 - Maintainer decision (2026-10-13), recorded as the third exception in `CLAUDE.md` / `AGENTS.md` section 1: engine files may get minimal, `P3P3DS:`-marked performance patches for Persona on the New 3DS, listed here.

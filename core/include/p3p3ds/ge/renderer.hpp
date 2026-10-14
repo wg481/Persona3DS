@@ -29,6 +29,16 @@ struct GeRegisters {
     // vertex/index address, PRIM and list control): a renderer may reuse what
     // it derived for the previous draw while this is unchanged.
     std::uint64_t state_version{};
+    // P3P3DS: which 32-bit words were written since AsyncRenderer last sent them to its worker.
+    // Word numbering: reg 0..255, then bone, world, view, tgen, proj (kWord* below). GeManager marks
+    // every write (dirty_tracked); with dirty_tracked clear (other writers, tests) AsyncRenderer
+    // compares every word instead. Comparing cost more than the full copy on the New 3DS
+    // (docs/CURRENT_STATE.md 2026-10-13), hence the marks.
+    static constexpr std::uint32_t kWordBone = 256u, kWordWorld = kWordBone + 96u, kWordView = kWordWorld + 12u,
+                                   kWordTgen = kWordView + 12u, kWordProj = kWordTgen + 12u, kWords = kWordProj + 16u;
+    mutable std::array<std::uint32_t, (kWords + 31u) / 32u> dirty{};
+    bool dirty_tracked{};
+    void mark(std::uint32_t word) noexcept { dirty[word >> 5] |= 1u << (word & 31u); }
 };
 
 enum class Prim : std::uint32_t { Points = 0, Lines = 1, LineStrip = 2, Triangles = 3, TriangleStrip = 4, TriangleFan = 5, Sprites = 6 };

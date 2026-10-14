@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 
 namespace p3p3ds::ge {
@@ -26,6 +27,20 @@ struct StateDelta {
 };
 constexpr std::uint32_t kBoneAt = 256u, kWorldAt = kBoneAt + 96u, kViewAt = kWorldAt + 12u, kTgenAt = kViewAt + 12u,
                         kProjAt = kTgenAt + 12u, kStateEnd = kProjAt + 16u;
+static_assert(kBoneAt == GeRegisters::kWordBone && kWorldAt == GeRegisters::kWordWorld && kViewAt == GeRegisters::kWordView &&
+              kTgenAt == GeRegisters::kWordTgen && kProjAt == GeRegisters::kWordProj && kStateEnd == GeRegisters::kWords);
+
+std::uint32_t get_word(const GeRegisters &r, std::uint32_t index) {
+    if (index < kBoneAt) return r.reg[index];
+    const float *f = index < kWorldAt ? &r.bone[index - kBoneAt]
+                   : index < kViewAt  ? &r.world[index - kWorldAt]
+                   : index < kTgenAt  ? &r.view[index - kViewAt]
+                   : index < kProjAt  ? &r.tgen[index - kTgenAt]
+                                      : &r.proj[index - kProjAt];
+    std::uint32_t w;
+    std::memcpy(&w, f, 4u);
+    return w;
+}
 
 // Appends (base + i, word) for every word of `now` that differs from `sent`, and updates `sent`.
 template <class T, std::size_t N>
@@ -233,12 +248,27 @@ void AsyncRenderer::push_state(const GeRegisters &regs) {
     // worker_regs_ at the start), behind a StateDelta header in delta_.
     static_assert(kStateWords == kStateEnd && sizeof(StateDelta) == 16u);
     std::uint32_t *sent = sent_state_.data(), *out = delta_.data() + 4u;
-    std::uint32_t n = diff_words(regs.reg, sent, 0u, out, 0u);
-    n = diff_words(regs.bone, sent + kBoneAt, kBoneAt, out, n);
-    n = diff_words(regs.world, sent + kWorldAt, kWorldAt, out, n);
-    n = diff_words(regs.view, sent + kViewAt, kViewAt, out, n);
-    n = diff_words(regs.tgen, sent + kTgenAt, kTgenAt, out, n);
-    n = diff_words(regs.proj, sent + kProjAt, kProjAt, out, n);
+    std::uint32_t n = 0;
+    if (regs.dirty_tracked) { // the words GeManager marked as written: no pass over all 1.6 KB
+        for (std::uint32_t k = 0; k < regs.dirty.size(); ++k) {
+            for (std::uint32_t bits = regs.dirty[k]; bits != 0u; bits &= bits - 1u) {
+                const std::uint32_t i = k * 32u + static_cast<std::uint32_t>(std::countr_zero(bits));
+                const std::uint32_t w = get_word(regs, i);
+                sent[i] = w;
+                out[2u * n] = i;
+                out[2u * n + 1u] = w;
+                ++n;
+            }
+            regs.dirty[k] = 0u;
+        }
+    } else {
+        n = diff_words(regs.reg, sent, 0u, out, 0u);
+        n = diff_words(regs.bone, sent + kBoneAt, kBoneAt, out, n);
+        n = diff_words(regs.world, sent + kWorldAt, kWorldAt, out, n);
+        n = diff_words(regs.view, sent + kViewAt, kViewAt, out, n);
+        n = diff_words(regs.tgen, sent + kTgenAt, kTgenAt, out, n);
+        n = diff_words(regs.proj, sent + kProjAt, kProjAt, out, n);
+    }
     const StateDelta head{regs.state_version, n, 0u};
     std::memcpy(delta_.data(), &head, sizeof head);
     push(Type::State, delta_.data(), static_cast<std::uint32_t>(sizeof head) + n * 8u);

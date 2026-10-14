@@ -1,6 +1,7 @@
 // Kernel imports added by the Persona3DS fork (core/src/hle/fork_kernel.cpp),
 // checked against uOFW's semantics and dispatched through the runtime as the
 // game reaches them.
+#include "p3p3ds/ge/async_renderer.hpp"
 #include "p3p3ds/hle/fork_kernel.hpp"
 #include "p3p3ds/hle/fork_movie.hpp"
 #include "p3p3ds/hle/hle_modules.hpp"
@@ -15,6 +16,8 @@
 #include <memory>
 #include <iostream>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -646,6 +649,89 @@ void test_ge_loadclut_fast_path() {
     CHECK(!rt.stopped());
 }
 
+// P3P3DS: GeManager marks every register and matrix word it writes (GeRegisters::dirty), and
+// AsyncRenderer sends only marked words: random display lists through the real GE command path
+// reach a renderer behind the queue with the same registers and matrices as a direct renderer.
+void test_ge_marked_state_through_queue() {
+    struct Recorder final : p3p3ds::ge::GeRenderer {
+        std::vector<std::uint64_t> log;
+        p3p3ds::ge::DrawStats s;
+        void draw(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r, p3p3ds::ge::Prim p, std::uint32_t c, std::uint32_t, std::uint32_t) override {
+            std::uint64_t h = 0xCBF29CE484222325ull ^ (static_cast<std::uint64_t>(p) << 40) ^ c;
+            auto mix = [&h](const void *q, std::size_t n) {
+                const auto *b = static_cast<const std::uint8_t *>(q);
+                for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001B3ull;
+            };
+            mix(r.reg.data(), sizeof r.reg);
+            mix(r.bone.data(), sizeof r.bone);
+            mix(r.world.data(), sizeof r.world);
+            mix(r.view.data(), sizeof r.view);
+            mix(r.tgen.data(), sizeof r.tgen);
+            mix(r.proj.data(), sizeof r.proj);
+            mix(&r.state_version, sizeof r.state_version);
+            log.push_back(h);
+        }
+        void transfer(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &) override {}
+        const p3p3ds::ge::DrawStats &stats() const override { return s; }
+    };
+    auto run = [](bool queued) {
+        psprecomp::Runtime rt;
+        p3p3ds::KernelState kernel;
+        p3p3ds::hle::register_all_hle_modules(rt, kernel);
+        auto rec = std::make_unique<Recorder>();
+        Recorder *seen = rec.get();
+        std::thread worker;
+        std::unique_ptr<p3p3ds::ge::AsyncRenderer> async_owner;
+        if (queued) {
+            p3p3ds::ge::WorkerHooks hooks;
+            hooks.start = [&worker](void (*entry)(void *), void *arg) { worker = std::thread(entry, arg); return true; };
+            hooks.join = [&worker] { if (worker.joinable()) worker.join(); };
+            hooks.pause = [] { std::this_thread::yield(); };
+            kernel.ge().set_renderer(std::make_unique<p3p3ds::ge::AsyncRenderer>(std::move(rec), 0, std::move(hooks)));
+        } else {
+            kernel.ge().set_renderer(std::move(rec));
+        }
+        auto &m = rt.memory();
+        constexpr std::uint32_t kList = 0x08A40000u, kVerts = 0x08B00000u;
+        rt.cpu().set_gpr(4, kList); rt.cpu().set_gpr(5, kList); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+        rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+        const auto id = rt.cpu().gpr[2];
+        std::uint32_t seed = 777u, pc = kList;
+        const auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+        // Matrix selects / data, plain state registers (no list control, no PRIM variants, LOADCLUT,
+        // transfer or VTYPE), and a draw of one triangle every few commands.
+        static constexpr std::uint8_t kMatrix[] = {0x2A, 0x2B, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41};
+        m.store32(pc, 0x12000000u | 0x11Cu); pc += 4u; // VTYPE: float uv, 8888 colour, float position
+        for (int update = 0; update < 300; ++update) {
+            for (int k = 0; k < 24; ++k) {
+                const std::uint32_t pick = rnd() % 8u;
+                std::uint32_t op;
+                if (pick < 3u) op = kMatrix[rnd() % sizeof kMatrix];
+                else if (pick < 7u) { do op = 0x15u + rnd() % (0x100u - 0x15u); while (op == 0x12u || op == 0xC4u || op == 0xEAu || (op >= 0x2Au && op <= 0x41u)); }
+                else {
+                    m.store32(pc, 0x10000000u | ((kVerts >> 8) & 0x0F0000u)); // BASE
+                    m.store32(pc + 4u, 0x01000000u | (kVerts & 0xFFFFFFu)); // VADDR
+                    pc += 8u;
+                    op = 0x04u;
+                }
+                const std::uint32_t arg = op == 0x04u ? (3u << 16) | 3u : op == 0x2Au ? rnd() % 96u : (op & 1u) == 0u && op >= 0x3Au && op <= 0x40u ? rnd() % 16u : rnd() & 0xFFFFFFu;
+                m.store32(pc, (op << 24) | arg);
+                pc += 4u;
+            }
+            rt.cpu().set_gpr(4, id); rt.cpu().set_gpr(5, pc);
+            rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+        }
+        kernel.ge().renderer().drain();
+        CHECK(!rt.stopped());
+        std::vector<std::uint64_t> log = seen->log;
+        kernel.ge().set_renderer(nullptr); // joins the worker
+        return log;
+    };
+    const auto direct = run(false), queued = run(true);
+    CHECK(direct.size() > 500u);
+    CHECK(queued == direct);
+}
+
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
 // 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
 void test_mpeg_avc_csc() {
@@ -1122,6 +1208,7 @@ int main() {
     test_mpeg_decode_ycbcr();
     test_ge_stall_timing();
     test_ge_loadclut_fast_path();
+    test_ge_marked_state_through_queue();
     test_ge_stall_batching();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();
