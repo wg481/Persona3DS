@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -42,8 +43,9 @@ public:
         if (in_ == nullptr || out_ == nullptr) { status_ = "mvd: no linear memory for buffers"; return; }
         init_ = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_BGR565, workbuf_, nullptr); // see the header comment
         char text[96];
-        std::snprintf(text, sizeof text, "mvd init %08lx work %lu KiB", static_cast<unsigned long>(init_),
-                      static_cast<unsigned long>(workbuf_ / 1024u));
+        // Persona3DS: linear memory left after the init (-1: libctru's linearAlloc of the work buffer failed)
+        std::snprintf(text, sizeof text, "mvd init %08lx work %lu KiB, linear free %lu KiB", static_cast<unsigned long>(init_),
+                      static_cast<unsigned long>(workbuf_ / 1024u), static_cast<unsigned long>(linearSpaceFree() / 1024u));
         status_ = text;
         if (R_FAILED(init_)) return;
         mvdstdGenerateDefaultConfig(&config_, width, height, width, height, nullptr, reinterpret_cast<u32 *>(out_), reinterpret_cast<u32 *>(out_));
@@ -102,6 +104,7 @@ public:
         ++timed_;
         return true;
     }
+    [[nodiscard]] bool ready() const noexcept { return ready_; }
     [[nodiscard]] std::string status() const override {
         if (timed_ == 0u) return status_;
         char text[64]; // per picture: MVD process + render (includes waiting for the decoder), RGB565 -> 8888 table
@@ -131,8 +134,19 @@ private:
     std::uint64_t timed_{};
 };
 
-inline void install_mvd_decoder() {
-    hle::media::set_video_decoder_factory([](std::uint32_t w, std::uint32_t h) { return std::make_unique<MvdDecoder>(w, h); });
+// Persona3DS: make_room frees linear memory (the GPU renderer's unused textures) and is called once when
+// the decoder could not start: mvdstdInit's 3 MiB work buffer comes from linear memory, which textures fill
+// during play (hospital cutscene: "mvd init ffffffff", the movie stayed black; docs/CURRENT_STATE.md 2026-10-14).
+inline void install_mvd_decoder(std::function<void()> make_room = {}) {
+    hle::media::set_video_decoder_factory([make_room](std::uint32_t w, std::uint32_t h) -> std::unique_ptr<hle::media::VideoDecoder> {
+        auto decoder = std::make_unique<MvdDecoder>(w, h);
+        if (!decoder->ready() && make_room) {
+            decoder.reset(); // its buffers and the MVD service go first
+            make_room();
+            decoder = std::make_unique<MvdDecoder>(w, h);
+        }
+        return decoder;
+    });
 }
 
 } // namespace p3p3ds::n3ds

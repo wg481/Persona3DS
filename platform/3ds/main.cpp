@@ -470,15 +470,15 @@ void write_bmp(const char *path, const std::vector<std::uint8_t> &rgb, std::uint
 std::string gpu_text() {
     if (g_gpu == nullptr) return {};
     const auto &g = g_gpu->gpu_stats();
-    char buf[384];
+    char buf[448]; // Persona3DS: was 384 (line count added)
     std::snprintf(buf, sizeof buf,
-        "gpu    : draws %llu tris %llu skip %llu\n"
+        "gpu    : draws %llu tris %llu skip %llu lines %llu\n"
         "         tex %lu up %llu hit %llu rtt %llu\n"
         "         present gpu %llu cpu %llu same %llu\n"
         "         flush cmd %llu arena %llu w/draw %llu\n"
         "movie  : skip %llu rtt %llu merge %lluk>%lluk f%lluk\n",
         static_cast<unsigned long long>(g.draws), static_cast<unsigned long long>(g.triangles),
-        static_cast<unsigned long long>(g.skipped_prims), static_cast<unsigned long>(g.textures),
+        static_cast<unsigned long long>(g.skipped_prims), static_cast<unsigned long long>(g.line_prims), static_cast<unsigned long>(g.textures),
         static_cast<unsigned long long>(g.texture_uploads), static_cast<unsigned long long>(g.texture_hits),
         static_cast<unsigned long long>(g.target_textures), static_cast<unsigned long long>(g.gpu_presents),
         static_cast<unsigned long long>(g.cpu_presents), static_cast<unsigned long long>(g.skipped_presents),
@@ -982,7 +982,13 @@ int main() {
         // Read-only and unchanged while the game runs: lookups cached (vfs.hpp).
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
-        p3p3ds::n3ds::install_mvd_decoder(); // Persona3DS: converted movies on the hardware H.264 decoder
+        // Persona3DS: converted movies on the hardware H.264 decoder; when it cannot start for want of linear
+        // memory, the GPU renderer's textures unused by the current frame are freed and it tries once more.
+        p3p3ds::n3ds::install_mvd_decoder([] {
+            if (g_gpu == nullptr) return;
+            if (g_async != nullptr) (void)g_async->call_idle([](p3p3ds::ge::GeRenderer &) { return g_gpu->trim_textures(); });
+            else (void)g_gpu->trim_textures();
+        });
         // Persona3DS: the next movie picture is decoded on core 1 while the game runs (fork_core1.hpp);
         // an empty sdmc:/persona3ds/no_core1.txt keeps decoding on the game's core.
         {
