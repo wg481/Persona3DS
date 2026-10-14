@@ -15,14 +15,48 @@
 namespace p3p3ds::ge {
 namespace {
 
-// Everything of GeRegisters but the CLUT (sent on its own, only when it changed).
-struct StatePayload {
-    std::array<std::uint32_t, 256> reg;
-    std::array<float, 12 * 8> bone;
-    std::array<float, 12> world, view, tgen;
-    std::array<float, 16> proj;
+// P3P3DS: a State record is [StateDelta][count x (index, value)]: the 32-bit words of GeRegisters
+// but the CLUT (sent on its own, only when it changed) that differ from the worker's copy. Word
+// index: reg 0..255, bone 256..351, world 352..363, view 364..375, tgen 376..387, proj 388..403.
+// It replaced a full 1.6 KB snapshot copied twice per state change (school dungeon: one per draw,
+// about 15k/s, the main core's `ge` share; docs/CURRENT_STATE.md 2026-10-13).
+struct StateDelta {
     std::uint64_t state_version;
+    std::uint32_t count, pad;
 };
+constexpr std::uint32_t kBoneAt = 256u, kWorldAt = kBoneAt + 96u, kViewAt = kWorldAt + 12u, kTgenAt = kViewAt + 12u,
+                        kProjAt = kTgenAt + 12u, kStateEnd = kProjAt + 16u;
+
+// Appends (base + i, word) for every word of `now` that differs from `sent`, and updates `sent`.
+template <class T, std::size_t N>
+std::uint32_t diff_words(const std::array<T, N> &now, std::uint32_t *sent, std::uint32_t base, std::uint32_t *out, std::uint32_t n) {
+    static_assert(sizeof(T) == 4u);
+    const auto *cur = reinterpret_cast<const std::uint8_t *>(now.data());
+    for (std::uint32_t i = 0; i < N; i += 8u) {
+        const std::uint32_t len = std::min<std::uint32_t>(8u, static_cast<std::uint32_t>(N) - i);
+        if (std::memcmp(cur + i * 4u, sent + i, len * 4u) == 0) continue;
+        for (std::uint32_t j = i; j < i + len; ++j) {
+            std::uint32_t w;
+            std::memcpy(&w, cur + j * 4u, 4u);
+            if (w == sent[j]) continue;
+            sent[j] = w;
+            out[2u * n] = base + j;
+            out[2u * n + 1u] = w;
+            ++n;
+        }
+    }
+    return n;
+}
+
+void set_word(GeRegisters &r, std::uint32_t index, std::uint32_t value) {
+    if (index < kBoneAt) { r.reg[index] = value; return; }
+    float *f = index < kWorldAt ? &r.bone[index - kBoneAt]
+             : index < kViewAt  ? &r.world[index - kWorldAt]
+             : index < kTgenAt  ? &r.view[index - kViewAt]
+             : index < kProjAt  ? &r.tgen[index - kTgenAt]
+                                : &r.proj[index - kProjAt];
+    std::memcpy(f, &value, 4u);
+}
 struct ClutPayload {
     std::array<std::uint32_t, 256> clut;
     std::uint32_t clut_words;
@@ -92,14 +126,14 @@ void AsyncRenderer::worker_loop() {
             tail_.store(0u, std::memory_order_release);
             continue;
         case Type::State: {
-            StatePayload s;
+            StateDelta s; // P3P3DS: changed words only
             std::memcpy(&s, payload, sizeof s);
-            worker_regs_.reg = s.reg;
-            worker_regs_.bone = s.bone;
-            worker_regs_.world = s.world;
-            worker_regs_.view = s.view;
-            worker_regs_.tgen = s.tgen;
-            worker_regs_.proj = s.proj;
+            const std::uint8_t *words = payload + sizeof s;
+            for (std::uint32_t k = 0; k < s.count; ++k) {
+                std::uint32_t pair[2];
+                std::memcpy(pair, words + k * 8u, sizeof pair);
+                set_word(worker_regs_, pair[0], pair[1]);
+            }
             worker_regs_.state_version = s.state_version;
             break;
         }
@@ -195,15 +229,19 @@ void AsyncRenderer::push(Type type, const void *payload, std::uint32_t payload_b
 // hash changed.
 void AsyncRenderer::push_state(const GeRegisters &regs) {
     if (state_sent_ && regs.state_version == sent_version_) return;
-    StatePayload s;
-    s.reg = regs.reg;
-    s.bone = regs.bone;
-    s.world = regs.world;
-    s.view = regs.view;
-    s.tgen = regs.tgen;
-    s.proj = regs.proj;
-    s.state_version = regs.state_version;
-    push(Type::State, &s, sizeof s);
+    // P3P3DS: only the words that differ from the worker's copy (sent_state_, all zero like
+    // worker_regs_ at the start), behind a StateDelta header in delta_.
+    static_assert(kStateWords == kStateEnd && sizeof(StateDelta) == 16u);
+    std::uint32_t *sent = sent_state_.data(), *out = delta_.data() + 4u;
+    std::uint32_t n = diff_words(regs.reg, sent, 0u, out, 0u);
+    n = diff_words(regs.bone, sent + kBoneAt, kBoneAt, out, n);
+    n = diff_words(regs.world, sent + kWorldAt, kWorldAt, out, n);
+    n = diff_words(regs.view, sent + kViewAt, kViewAt, out, n);
+    n = diff_words(regs.tgen, sent + kTgenAt, kTgenAt, out, n);
+    n = diff_words(regs.proj, sent + kProjAt, kProjAt, out, n);
+    const StateDelta head{regs.state_version, n, 0u};
+    std::memcpy(delta_.data(), &head, sizeof head);
+    push(Type::State, delta_.data(), static_cast<std::uint32_t>(sizeof head) + n * 8u);
     state_sent_ = true;
     sent_version_ = regs.state_version;
     ++stats_.states;

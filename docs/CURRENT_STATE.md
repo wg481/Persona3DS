@@ -2,6 +2,15 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## GE hand-over sends changed state words only (2026-10-13)
+
+- Maintainer decision (2026-10-13), recorded as the third exception in `CLAUDE.md` / `AGENTS.md` section 1: engine files may get minimal, `P3P3DS:`-marked performance patches for Persona on the New 3DS, listed here.
+- [VERIFIED] cost being removed, by the code (`core/src/ge/async_renderer.cpp` before this change): every State record copied all of `GeRegisters` but the CLUT (1,624 bytes) into a stack `StatePayload`, then into the ring (record 1,632 bytes), and the worker copied it out twice more. School dungeon: `ge in: draw 14.9k st 14.9k /s` and `TEXADDR`/`VADDR`-style commands before each draw bump `state_version`, so one full record per draw ([VERIFIED] report on `2d1ce936`).
+- Change: a State record is a 16-byte header (`state_version`, count) plus (index, value) pairs for the 32-bit words that differ from a shadow of the worker's copy (`sent_state_`, 404 words: reg, bone, world, view, tgen, proj); compared in blocks of 8 words with `memcmp`. The worker applies the pairs. CLUT records are unchanged. A record is still sent when nothing differs, so `state_version` on the worker follows the game's as before (`gpu_renderer.cpp` fast path keys on it).
+- [VERIFIED] host test `p3p_ge_geometry` (`async_renderer_checks`, 6,000 random calls through the smallest queue): replayed calls, registers, matrices and CLUT equal direct calls; extended to change `view`, `tgen`, `proj` and rewrite unchanged registers. Mapping `view` words onto `world` makes it fail. CTest 29/29.
+- [VERIFIED] host benchmark (`.tmp/asyncbench/bench.cpp`, untracked; x86, game thread alone, dungeon-like pattern: 8 register words written per draw, 4 of them changed, plus 1 matrix word, CLUT every third draw, best of 10): 0.295 us per draw before, 0.184 us after; State record 1,632 bytes before, 64 bytes after (5 changed words).
+- [INFERRED] the ARM11 gain is larger than on x86 (smaller caches; the old path wrote 1.6 KB of fresh ring lines per draw). [UNVERIFIED] on the New 3DS: main core `ge` share well below 16 % in the school dungeon, `gpu thd: busy` lower.
+
 ## Pacing: the deficit is capped at two vblanks, not cleared (2026-10-13)
 
 - [VERIFIED] Maintainer's New 3DS on `2d1ce936` (label `595ea75e`), school dungeon, `profile_seconds.csv` rows 37-64 (wall 37-66 s): 31-43 vblank/s, 21-28 game frames/s, speed 51-70 %, main core `aot 44-53 hle 19-25 ge 11-17 idle 7-15`; report last 10 s 59 %, `idle 12`. `idle` is only the pacing sleep (`stats.idle_ticks`, `platform/3ds/main.cpp`), so the main core slept 12 % of the time while the game ran at 59 % of real time. Opening movie: about 49.9 fps (maintainer).

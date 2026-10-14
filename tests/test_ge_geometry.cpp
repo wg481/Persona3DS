@@ -250,6 +250,12 @@ void async_renderer_checks(psprecomp::GuestMemory &m) {
                 r.reg[next() % 256u] = next();
                 r.world[next() % 12u] = static_cast<float>(next());
                 r.bone[next() % 96u] = static_cast<float>(next());
+                if (what == 1u) { // P3P3DS: every matrix reaches the worker (State records carry changed words only)
+                    r.view[next() % 12u] = static_cast<float>(next());
+                    r.tgen[next() % 12u] = static_cast<float>(next());
+                    r.proj[next() % 16u] = static_cast<float>(next());
+                    r.reg[next() % 256u] = r.reg[next() % 256u]; // often no change at all
+                }
                 if (what == 0u) {
                     for (auto &w : r.clut) w = next();
                     r.clut_words = next() % 256u;

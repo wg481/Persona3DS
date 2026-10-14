@@ -14,6 +14,7 @@
 // to the inner renderer, as before.
 #include "p3p3ds/ge/renderer.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -99,6 +100,11 @@ private:
     // What the worker's register copy holds (game's thread).
     bool state_sent_{}, clut_sent_{};
     std::uint64_t sent_version_{}, sent_clut_hash_{};
+    // P3P3DS: State records carry only the words that changed (kStateWords: reg, bone, world, view,
+    // tgen, proj as 32-bit words). sent_state_ is what the worker holds; delta_ builds a record.
+    static constexpr std::uint32_t kStateWords = 256u + 96u + 12u * 3u + 16u;
+    std::array<std::uint32_t, kStateWords> sent_state_{};
+    std::array<std::uint32_t, 4u + 2u * kStateWords> delta_{};
     GeRegisters worker_regs_; // the worker's copy, rebuilt from State / Clut records
     AsyncStats stats_;
 };
