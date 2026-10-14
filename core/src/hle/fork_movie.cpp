@@ -18,6 +18,7 @@ Movies g_movies;
 struct PictureWrite {
     std::uint32_t address{}, stride{};
     std::uint64_t generation{}; // 0: free slot
+    std::uint32_t rows{};       // rows written from row 0 (0: unknown)
 };
 std::mutex g_writes_lock;
 std::array<PictureWrite, 4> g_writes{}; // Persona double-buffers its movie texture: 2 addresses
@@ -157,7 +158,7 @@ bool Movies::next_audio(std::uint32_t handle, std::int16_t *out) {
 
 Movies &fork_movies() noexcept { return g_movies; }
 
-void note_picture_write(std::uint32_t address, std::uint32_t stride) {
+void note_picture_write(std::uint32_t address, std::uint32_t stride, std::uint32_t rows) {
     address = psprecomp::GuestMemory::canonical(address);
     const std::lock_guard<std::mutex> lock(g_writes_lock);
     PictureWrite *slot = nullptr;
@@ -166,14 +167,18 @@ void note_picture_write(std::uint32_t address, std::uint32_t stride) {
     if (slot == nullptr) // a free slot, else the least recently written
         for (auto &w : g_writes)
             if (slot == nullptr || w.generation < slot->generation) slot = &w;
-    *slot = {address, stride, ++g_last_generation};
+    *slot = {address, stride, ++g_last_generation, rows};
 }
 
-bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation) {
+bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation, std::uint32_t *rows) {
     address = psprecomp::GuestMemory::canonical(address);
     const std::lock_guard<std::mutex> lock(g_writes_lock);
     for (const auto &w : g_writes)
-        if (w.generation != 0u && w.address == address && w.stride == stride) { generation = w.generation; return true; }
+        if (w.generation != 0u && w.address == address && w.stride == stride) {
+            generation = w.generation;
+            if (rows != nullptr) *rows = w.rows;
+            return true;
+        }
     return false;
 }
 

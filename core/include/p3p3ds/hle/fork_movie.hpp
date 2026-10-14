@@ -133,8 +133,11 @@ private:
 // another thread (the 3DS GE worker) and gives the generation of the last write at exactly that
 // address and stride. Generations only grow, across movies; forget_picture_writes (a movie ends or a
 // new one starts) drops every address, so their textures go back to content hashing.
-void note_picture_write(std::uint32_t address, std::uint32_t stride);
-[[nodiscard]] bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation);
+// rows: how many rows from row 0 hold the picture (0: unknown); the renderer uploads only those
+// (Persona: 272 rows of a 512-row texture, docs/CURRENT_STATE.md 2026-10-14).
+void note_picture_write(std::uint32_t address, std::uint32_t stride, std::uint32_t rows = 0u);
+[[nodiscard]] bool picture_write_generation(std::uint32_t address, std::uint32_t stride, std::uint64_t &generation,
+                                            std::uint32_t *rows = nullptr);
 void forget_picture_writes();
 
 } // namespace p3p3ds::hle::media

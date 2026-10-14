@@ -2,6 +2,18 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Texture back-off confirmed (title screen at full speed); movie upload limited to the picture's rows (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `19b42ee1` (same route: opening movie, title screen, save, isometric room, school dungeon), `profile_seconds.csv`:
+  - Title screen (rows 37-45): 100 % speed (75-84 % before), core 2 48-54 % busy (77-79 %), `gpu_hash_pct` 6-10 (43-46), `sceGeDrawSync` 407-464 ms/s (709-749): the game now idles 21-27 % of the time. No visual problem reported.
+  - Isometric room (rows 52-61): 100 %, core 2 24-25 % busy (about 64 %), hash 3-4 % (32 %).
+  - School dungeon (rows 63-88): 82-101 %, mostly 95-100 %; core 2 47-79 % busy, hash 2-6 % (9-12 %); `sceGeDrawSync` mostly gone from the top imports. Report last 10 s: 100 % of real time, `aot 66 hle 20 idle 13`, `gpu thd: busy 56`.
+  - Opening movie (rows 17-33): unchanged at 79-86 % (`gpu_upload_pct` 22-23, `sceGeDrawSync` 224-241 ms/s, `sceMpeg` 197-248 ms/s at about 25 pictures/s): about 8.8 ms of core-2 upload per picture, during which the game waits.
+- [VERIFIED] by the code: `sceMpegAvcCsc` writes rows `y .. y + h - 1` (272 of Persona's 512-row movie texture, `fork_kernel.cpp`), but the renderer read and tiled all 512 rows (1 MiB) per picture (`gpu_renderer.cpp` `bind_texture` direct path).
+- Change: `note_picture_write(address, stride, rows)` records `y + h`; `picture_write_generation(..., &rows)` returns it (`fork_movie.*`); the renderer's direct 8888 upload of a movie picture reads and writes only those rows plus one tile row below them (`upload_rgba8_tiled(..., rows)`: memory rows `th - n .. th - 1`, PSP rows being stored bottom-up), the rest of the texture is never sampled.
+- [VERIFIED] host check (`.tmp/upload_rows/check.cpp`, untracked; the function copied from `gpu_renderer.cpp`, AddressSanitizer): for rows 1, 8, 270, 272, 504, 505, 512 of a 512x512 texture the partial upload equals the full upload on the written memory rows, leaves the others untouched, and reads only the given guest rows. Host tests: `picture_write_generation` returns the rows of the last write (`test_fork_media`, `test_fork_kernel`: 272 for range 0,0,480,272 and 144 for 0,16,480,128). CTest 29/29.
+- [UNVERIFIED] on the New 3DS: movie `gpu_upload_pct` near 12 (280 of 512 rows) and less `sceGeDrawSync` time.
+
 ## Core 2 per scene; unchanged textures re-checked less often (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `e145bac4` (GE-worker columns) (`profile_seconds.csv`; boot, opening movie, title screen, save loaded, isometric room, school dungeon), per scene:

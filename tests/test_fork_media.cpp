@@ -310,6 +310,10 @@ void test_picture_writes() {
     check(media::picture_write_generation(0x08F58010u, 512u, g) && g == a1, "first buffer unchanged by the second");
     media::note_picture_write(0x08F58010u, 512u);
     check(media::picture_write_generation(0x08F58010u, 512u, a2) && a2 > b1, "rewrite: generation grows");
+    std::uint32_t rows = 99u;
+    check(media::picture_write_generation(0x08F58010u, 512u, g, &rows) && rows == 0u, "rows not given: 0 (unknown)");
+    media::note_picture_write(0x08F58010u, 512u, 272u);
+    check(media::picture_write_generation(0x08F58010u, 512u, g, &rows) && rows == 272u, "rows of the last write");
     for (std::uint32_t k = 0; k < 4; ++k) media::note_picture_write(0x09000000u + k * 0x100000u, 512u);
     check(!media::picture_write_generation(0x08ED0010u, 512u, g), "four newer addresses evict the oldest");
     media::forget_picture_writes();

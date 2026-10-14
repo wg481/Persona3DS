@@ -901,6 +901,10 @@ void test_mpeg_avc_csc() {
     CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g1) && g1 != 0u);
     CHECK(csc(0u, 0u, 480u, 272u) == 0u);
     CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g2) && g2 > g1);
+    std::uint32_t rows = 0; // P3P3DS: rows of the picture (range y + h), for the renderer's upload
+    CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g2, &rows) && rows == 272u);
+    CHECK(csc(0u, 16u, 480u, 128u) == 0u);
+    CHECK(p3p3ds::hle::media::picture_write_generation(kDest, 512u, g2, &rows) && rows == 144u);
     p3p3ds::hle::media::forget_picture_writes();
     (void)csc(0u, 0u, 480u, 270u); // not a multiple of 16: reported
     CHECK(rt.stopped());

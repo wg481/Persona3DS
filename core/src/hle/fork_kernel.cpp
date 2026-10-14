@@ -559,7 +559,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
                 std::memcpy(m.raw_pointer(row_address(row), w * 4u), picture + (y + row) * pw + x, w * 4u);
                 m.notify_vram_write(row_address(row), w * 4u);
             }
-            hle::media::note_picture_write(dest, stride); // after the rows: the renderer may read them at once
+            hle::media::note_picture_write(dest, stride, y + h); // after the rows: the renderer may read them at once
             hle::media::fork_movies().add_copy_time(static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - copy_start).count()));
             ctx.set_gpr(2, 0u);
@@ -575,7 +575,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             }
             m.notify_vram_write(row_address(row), w * 4u);
         }
-        hle::media::note_picture_write(dest, stride);
+        hle::media::note_picture_write(dest, stride, y + h);
         ctx.set_gpr(2, 0u);
     });
 
