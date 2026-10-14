@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Marked state words confirmed: GE hand-over 5 us per draw (2026-10-13)
+
+- [VERIFIED] Maintainer's New 3DS on `0fcfaf52` (label `595ea75e`), school dungeon `profile_seconds.csv` rows 42-87: 16.6-21.2k stall updates/s (16.0-18.4k on `66bd1bc8`), speed 58-93 %, `aot 57-63 hle 27-30 ge 8-10 idle 0`; report last 10 s 86 % (65 %), `ge in: draw 18.3k /s`, `gpu thd: busy 51 wait 0.1`; whole run 32.6 game frames/s, 84 %. Main-core GE time per draw (render_ns): 9 % / 18.3k = 4.9 us (13.4 us on `66bd1bc8`, 10.7 us with the full copies).
+- Per draw on the main core now: game code `aot` 60 % / 18.3k = 33 us, `hle` 29 % = 16 us (mostly the stall update outside the renderer hand-over: `sceGe_user_E0D68148` about 300 ms/s over about 19k calls), GE hand-over 5 us.
+- Report line `failed alloc: 0 bytes from 0x0` meant no allocation had failed (maintainer asked about it); it now reads `failed alloc: none` until one fails (`platform/3ds/main.cpp` `mem_line`).
+- [VERIFIED] core budget, libctru `include/3ds/thread.h` `threadCreate` notes (clone in `.tmp/libctru`): core 0 is the application core; core 1 is the system core, one application thread when `APT_SetAppCpuTimeLimit` is used (the runner uses 30 % only when core 2 is missing, `probe_cores`); core 2 is New 3DS only with exheader kernel flag 0x2000 (report `core2 ok, parallel x1.98`); core 3 is not available to applications.
+
 ## Pacing fix confirmed; comparing state words was slower on the 3DS, writes are marked instead (2026-10-13)
 
 - [VERIFIED] Maintainer's New 3DS on `66bd1bc8` (label `595ea75e`): opening movie 51.4 fps (49.9 before); school dungeon `profile_seconds.csv` rows 51-84: `idle` 0 in every second (7-15 on `2d1ce936`), 16.0-18.4k stall updates/s (14.0-16.7k), speed 49-81 %; report last 10 s 65 % (59 %), `aot 53 hle 24 ge 22 idle 0`, `ge in: draw 16.4k /s`, `gpu thd: busy 46 wait 0.1`. The pacing fix removed the sleep while behind as expected.

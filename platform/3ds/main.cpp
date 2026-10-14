@@ -910,15 +910,19 @@ int main() {
     const auto mem_line = [] {
         char buf[256];
         const struct mallinfo mi = mallinfo();
+        // Persona3DS: "none" until an allocation failed ("0 bytes from 0x0" read like a failure).
+        char failed[64] = "failed alloc: none";
+        if (g_failed_alloc_caller != nullptr)
+            std::snprintf(failed, sizeof failed, "failed alloc: %lu bytes from %p", static_cast<unsigned long>(g_failed_alloc_bytes), g_failed_alloc_caller);
         std::snprintf(buf, sizeof buf,
                       "app mem: %lu KiB / %lu KiB\nheap: %lu KiB  in use: %lu KiB\nlinear free: %lu KiB\n"
-                      "failed alloc: %lu bytes from %p\n",
+                      "%s\n",
                       static_cast<unsigned long>((osGetMemRegionSize(MEMREGION_APPLICATION) - osGetMemRegionFree(MEMREGION_APPLICATION)) / 1024u),
                       static_cast<unsigned long>(osGetMemRegionSize(MEMREGION_APPLICATION) / 1024u),
                       static_cast<unsigned long>(envGetHeapSize() / 1024u),
                       static_cast<unsigned long>(mi.uordblks / 1024u),
                       static_cast<unsigned long>(linearSpaceFree() / 1024u),
-                      static_cast<unsigned long>(g_failed_alloc_bytes), g_failed_alloc_caller);
+                      failed.c_str());
         return std::string(buf);
     };
     std::printf("%s", mem_line().c_str());
