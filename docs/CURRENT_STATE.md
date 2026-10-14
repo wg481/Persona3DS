@@ -2,6 +2,11 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Decode-ahead on core 1 confirmed: opening movie near full speed (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `25382443` (report `cores: core2 ok, parallel x1.99, movies on core1, GE on core2, lists on core2`): opening movie "nearly perfect" (maintainer); `profile_seconds.csv` rows 17-30: 95-100 % speed (89-95 % before), 58-60 frames/s, `sceMpeg_31BD0272` 114-122 ms/s at 29-31 calls/s (215-273 ms/s at 27-29), report `decode 0.16 ms (read 0.61), copy 3.92 ms per picture` (decode 6.08 ms before) and `hw 5.47 conv 2.74 ms` (now on core 1, time-sliced at 30 %). No wrong or stuck picture reported. Title screen, isometric room 100 %; dungeon 83-102 %, mostly 95-100 %; whole run 96 %, last 10 s 100 %.
+- Still on the game's core in the movie: `sceGeDrawSync` 206-222 ms/s (about 3.6 ms per frame), `ThreadManForUser_A66B0120` 102-115 ms/s at 8,200-9,300 calls/s (about 12 us per call), `sceIoRead` 117-136 ms/s at about 30 calls/s (about 4.3 ms per read). The csc copy rose from 2.4 to 3.9 ms per picture [INFERRED] from memory contention with the decode on core 1.
+
 ## Movie rows confirmed; next movie picture decoded ahead on core 1 (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `11f18af9`, about 25 s of the opening movie (`profile_seconds.csv` rows 17-41): 89-95 % speed (79-86 % before), 54-57 frames/s, `gpu_upload_pct` 14-15 (22-23), `sceGeDrawSync` 148-161 ms/s (224-241); the game's thread is still fully busy (`aot 20-23 hle 76-79 idle 0`): `sceMpeg_31BD0272` (`sceMpegAvcCsc`: decode + copy) 215-273 ms/s at 27-29 calls/s, `ThreadManForUser_A66B0120` about 100 ms/s at about 8,000 calls/s, `sceIoRead` about 110 ms/s at 28 calls/s. Report: `hw 3.22 conv 2.34 ms; decode 6.08 ms (read 0.51), copy 2.41 ms per picture`. Title screen 100 %, isometric room 100 %, dungeon mostly 94-101 %; whole run 95 %, last 10 s 99 %.
