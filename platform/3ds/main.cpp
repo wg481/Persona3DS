@@ -922,7 +922,7 @@ int main() {
                       static_cast<unsigned long>(envGetHeapSize() / 1024u),
                       static_cast<unsigned long>(mi.uordblks / 1024u),
                       static_cast<unsigned long>(linearSpaceFree() / 1024u),
-                      failed.c_str());
+                      failed);
         return std::string(buf);
     };
     std::printf("%s", mem_line().c_str());
