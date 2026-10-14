@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Game code at -O2: about 20 % less main-core time per draw in the dungeon (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on master `40426994` built with `-DP3P_AOT_OPT=-O2` (no code change): `.3dsx` 29,793,508 bytes, boots and plays (opening movie, title, save, school dungeon); report `heap: 73028 KiB in use: 53263 KiB` (77,216 KiB heap with the `-Os` flags: the code is about 4.2 MiB larger), `failed alloc: none`.
+- [VERIFIED] school dungeon, `profile_seconds.csv` rows 31-58 against the same walk on `25382443` (rows 53-74): speed 86-102 %, mostly 96-101 % (83-102 %, mostly 95-100 %); main core `aot 50-67 idle 0-24` (`aot 59-77 idle 0-22`). Game code per draw (`aot` share / draws per second): 22-25 us (rows 33, 37, 49: 67 % / 27.3k, 57 % / 22.4k, 62 % / 28.4k) against about 29 us before. The remaining dips (86-90 %, rows 35, 40, 49, 53) are the seconds where core 2 is 80-84 % busy and `sceGeDrawSync` 157-267 ms/s: in the heaviest views core 2 is now the limit.
+- [WRONG] that `-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2` costs little at run time (the size/compile-time choice of `docs/3DS_PLATFORM.md` 8.5): on the New 3DS the game code is about 20 % slower per draw with it.
+- Change: `P3P_AOT_OPT` defaults to `-O2` (`platform/3ds/CMakeLists.txt`), and the P3P3DS Builder compiles the AOT units with `-O2` (`platform/pc/builder/pipeline.cpp`). Builds take longer; `-DP3P_AOT_OPT="-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2"` gives the old, faster build.
+
 ## Name-entry cursor confirmed; next: game code compile flags (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `99601630` (branch `claude/movie-decoder-memory`), 334 s including name entry: the cursor shows; report `gpu : draws 1137573 tris 2303946 skip 0 lines 19856` (skip 51,240 before), whole run 99 %, `movies : 4 matched ... 0 failed`. Maintainer: everything else works; what is left is the speed of first-person dungeon crawling.
