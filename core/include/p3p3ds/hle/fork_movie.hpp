@@ -14,6 +14,7 @@
 //   movie <prefix bytes> <FNV-1a 64 of the PSMF prefix, hex> <video .h264> <frames .idx> <audio .wav or ->
 // Frame index (.idx): "P3MV", then u32 version 1, width, height, count, and
 // count x (u32 offset, u32 size) of each access unit in the .h264 file.
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -41,6 +42,11 @@ using VideoDecoderFactory = std::function<std::unique_ptr<VideoDecoder>(std::uin
 // Set by the platform (PC: libavcodec if built with it; 3DS: MVD). Without
 // one, movies keep black pictures but still get their converted audio.
 void set_video_decoder_factory(VideoDecoderFactory factory);
+// P3P3DS: runs a task on another thread (3DS: core 1), false when it cannot. With one, a track decodes
+// the access unit after the one the game asked for while the game runs (MovieTrack::kick_ahead);
+// the decoder is then used by one thread at a time (the game's thread waits for the task first).
+using BackgroundExecutor = std::function<bool(void (*task)(void *), void *arg)>;
+void set_background_executor(BackgroundExecutor executor);
 
 class MovieTrack {
 public:
@@ -59,12 +65,24 @@ public:
     [[nodiscard]] const VideoDecoder *decoder() const noexcept { return decoder_.get(); }
     [[nodiscard]] std::uint64_t units_decoded() const noexcept { return units_; }
     [[nodiscard]] std::uint64_t read_us() const noexcept { return read_us_; }
+    [[nodiscard]] std::uint64_t ahead_used() const noexcept { return ahead_used_; } // P3P3DS: pictures decoded ahead
+    // P3P3DS: the decode-ahead task is running (it uses the decoder: do not read its status meanwhile).
+    [[nodiscard]] bool ahead_busy() const noexcept { return ahead_state_.load(std::memory_order_acquire) == 1; }
     static constexpr std::size_t kReadChunk = 256u * 1024u; // read-ahead of the stream (units are read in order)
 
 private:
     MovieTrack() = default;
     bool decode_next();
-    const std::uint8_t *read_unit(std::uint32_t offset, std::uint32_t size);
+    // P3P3DS: decode-ahead (set_background_executor). State 0 idle, 1 running, 2 done, 3 failed;
+    // the task owns decoder_, file_, chunk_ and ahead_ while it is 1.
+    void kick_ahead();
+    int wait_ahead();
+    static void ahead_task(void *self);
+    std::vector<std::uint32_t> ahead_;
+    std::atomic<int> ahead_state_{0};
+    std::uint32_t ahead_unit_{};
+    std::uint64_t ahead_read_us_{}, ahead_used_{};
+    const std::uint8_t *read_unit(std::uint32_t offset, std::uint32_t size, std::uint64_t &read_us); // P3P3DS: read_us per thread
     std::FILE *file_{};
     std::uint32_t width_{}, height_{};
     std::vector<std::pair<std::uint32_t, std::uint32_t>> aus_;

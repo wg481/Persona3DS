@@ -36,6 +36,7 @@
 #include "p3p3ds/fork_vfs.hpp"
 #include "p3p3ds/hle/fork_media.hpp"
 #include "p3p3ds/hle/fork_movie.hpp"
+#include "fork_core1.hpp"
 #include "fork_mvd.hpp"
 #include "fork_ndsp.hpp"
 #include "gpu_renderer.hpp"
@@ -234,6 +235,7 @@ public:
 };
 
 p3p3ds::n3ds::GpuRenderer *g_gpu = nullptr;
+p3p3ds::n3ds::Core1Worker g_core1; // Persona3DS: background work on core 1 (fork_core1.hpp)
 // The GE back end on core 2 (nullptr: the renderer runs on the game's thread).
 // Everything that touches citro3d goes through it: posted in order, or called
 // once the worker is idle.
@@ -981,6 +983,18 @@ int main() {
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
         p3p3ds::n3ds::install_mvd_decoder(); // Persona3DS: converted movies on the hardware H.264 decoder
+        // Persona3DS: the next movie picture is decoded on core 1 while the game runs (fork_core1.hpp);
+        // an empty sdmc:/persona3ds/no_core1.txt keeps decoding on the game's core.
+        {
+            bool use_core1 = true;
+            if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_core1.txt", "r")) { use_core1 = false; std::fclose(f); }
+            s32 priority = 0x30;
+            svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+            if (use_core1 && g_core1.start(priority > 0x18 ? priority - 1 : priority)) {
+                p3p3ds::hle::media::set_background_executor([](void (*task)(void *), void *arg) { return g_core1.post(task, arg); });
+                stats.cores += ", movies on core1";
+            }
+        }
         // Persona3DS: sound output (fork_ndsp.hpp); the sink runs inside sceAudio calls, pump() once per vblank.
         static p3p3ds::n3ds::NdspOutput ndsp;
         g_ndsp = &ndsp;
@@ -1239,6 +1253,8 @@ int main() {
     g_gpu = nullptr;
     g_async = nullptr;
     kernel_owner.reset(); // the GE worker stops, then the GPU renderer (citro3d) shuts down before gfx
+    p3p3ds::hle::media::set_background_executor(nullptr); // Persona3DS: core 1 worker (movies)
+    g_core1.stop();
     romfsExit();
     gfxExit();
     return 0;
