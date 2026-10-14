@@ -694,10 +694,16 @@ void log_second(const TimeSample &a, const TimeSample &b, const psprecomp::Runti
     const Split s = split_of(a, b);
     if (s.wall <= 0) return;
     auto pct = [&s](double v) { return 100.0 * v / s.wall; };
-    std::fprintf(g_seconds_log, "%.1f,%.2f,%.2f,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%s\n", ticks_to_s(b.wall), b.guest_us / 1e6,
+    // Persona3DS: gpu_* = the GE worker (core 2): busy share and its renderer steps (hash, upload, prep,
+    // vertices, waiting for the PICA200), and draws per second, to see which core limits a scene.
+    std::fprintf(g_seconds_log, "%.1f,%.2f,%.2f,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%s\n",
+                 ticks_to_s(b.wall), b.guest_us / 1e6,
                  s.wall, static_cast<unsigned long long>(b.vblanks - a.vblanks), static_cast<unsigned long long>(b.game_frames - a.game_frames),
                  pct(s.aot), pct(s.hle), pct(s.ge), pct(s.io), pct(s.present), pct(s.idle), pct(s.ui), (b.io_bytes - a.io_bytes) / 1024.0,
-                 b.hle_calls - a.hle_calls, 100.0 * (b.guest_us - a.guest_us) / 1e6 / s.wall, top_imports(rt).c_str());
+                 b.hle_calls - a.hle_calls, 100.0 * (b.guest_us - a.guest_us) / 1e6 / s.wall,
+                 pct(ticks_to_s(b.gpu_busy - a.gpu_busy)), pct(ticks_to_s(b.hash - a.hash)), pct(ticks_to_s(b.upload - a.upload)),
+                 pct(ticks_to_s(b.prep - a.prep)), pct(ticks_to_s(b.vertex - a.vertex)), pct(ticks_to_s(b.wait - a.wait)),
+                 (b.ge_draws - a.ge_draws) / s.wall, top_imports(rt).c_str());
     std::fflush(g_seconds_log);
 }
 
@@ -1062,6 +1068,7 @@ int main() {
             g_seconds_log = std::fopen(P3P_PROFILE_SD_BASE "/profile_seconds.csv", "w");
             if (g_seconds_log)
                 std::fputs("wall_s,guest_s,span_s,vblanks,game_frames,aot_pct,hle_pct,ge_pct,io_pct,present_pct,idle_pct,ui_pct,io_kib,hle_calls,speed_pct,"
+                           "gpu_busy_pct,gpu_hash_pct,gpu_upload_pct,gpu_prep_pct,gpu_vtx_pct,gpu_wait_pct,draws,"
                            "top_imports_ms_calls\n",
                            g_seconds_log);
             psprecomp::runtime_profile().per_import = g_seconds_log != nullptr;

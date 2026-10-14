@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Lists on core 2 confirmed: dungeon near full speed; where the remaining time goes (2026-10-13)
+
+- [VERIFIED] Maintainer's New 3DS on `68869857` (label `595ea75e`, report `cores: ... GE on core2, lists on core2`): no crash, hang or visible glitch reported ("getting better"); whole run 94 % of real time, 40.0 game frames/s at 60 vblank/s. School dungeon `profile_seconds.csv` rows 41-52 and 65-84: 20.8-26.0k stall updates/s (16.6-21.2k on `0fcfaf52`), speed 71-102 %, mostly 85-100 %; `sceGeListUpdateStallAddr` 2.7-2.9 us per call (about 16-21 us before); main core `aot 61-74 hle 23-33 ge 0`. Report last 10 s: 95 %, `aot 69 hle 26 idle 4`, `gpu thd: busy 69`, renderer `hash 12.1 wait 10.2`, `draw: prep 29.7`, `ge in: draw 21.8k /s`.
+- Remaining waits: in the dungeon the game's thread spends 9-17 % in `sceGeDrawSync` (`sceGe_user_B287BD61` 93-173 ms/s), waiting for core 2 at the end of a frame. Title screen (rows 20-26): 75-86 % speed with `sceGeDrawSync` 733-750 ms/s at 45-52 calls/s, i.e. the game's thread waits about 14 ms per frame for core 2; [VERIFIED] the same on runs before the change (650-680 ms/s), so the title screen was already limited by core 2. Opening movie (rows 17-18): 84-86 %, `sceMpeg` 204-207 ms/s and `sceGeDrawSync` 239-240 ms/s.
+- Change: `profile_seconds.csv` gains per-second GE-worker columns (`gpu_busy_pct`, `gpu_hash_pct`, `gpu_upload_pct`, `gpu_prep_pct`, `gpu_vtx_pct`, `gpu_wait_pct`, `draws`), so the core-2 work of the title screen and the movie can be split per scene.
+
 ## Display lists run on the GE worker (core 2) (2026-10-13)
 
 - Maintainer chose this step (2026-10-13) after the breakdown below: about 16 us of the main core's 54 us per draw is GE command execution and the stall-update import.
