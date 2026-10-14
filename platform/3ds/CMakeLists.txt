@@ -24,9 +24,12 @@ set(P3P_PROFILE_DIR "${P3P_ROOT}/profiles/p1p" CACHE PATH "Game profile director
 get_filename_component(P3P_PROFILE_DIR "${P3P_PROFILE_DIR}" ABSOLUTE BASE_DIR "${P3P_ROOT}")
 include("${P3P_PROFILE_DIR}/config/profile.cmake")
 set(P3P_ELF "${P3P_PROFILE_DIR}/game/eboot.elf" CACHE FILEPATH "Decrypted EBOOT of the profile's game")
-# Same flags as the P3P3DS Builder (platform/pc/builder/pipeline.cpp): GCSE and
-# scheduling cost 27 % of the compile time for 0.8 % of code (docs/3DS_PLATFORM.md 8.5).
-set(P3P_AOT_OPT "-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2" CACHE STRING "Optimization flags for the generated AOT units")
+# Same flags as the P3P3DS Builder (platform/pc/builder/pipeline.cpp). P3P3DS: -O2 since 2026-10-14: in
+# Persona's first-person dungeon the game code took about 20 % less main-core time per draw than with
+# "-Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2" (picked for size and compile time, whose run-time
+# speed was never measured), for 4.2 MiB less heap (docs/CURRENT_STATE.md 2026-10-14). The old flags stay a
+# -DP3P_AOT_OPT=... away for a faster build.
+set(P3P_AOT_OPT "-O2" CACHE STRING "Optimization flags for the generated AOT units")
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

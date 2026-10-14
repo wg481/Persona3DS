@@ -40,10 +40,12 @@ constexpr const char *kLoadBase = P3P_AOT_LOAD_BASE;
 constexpr const char *kUnitSpan = P3P_AOT_UNIT_SPAN;
 // Measured on the largest unit and the whole program (docs/3DS_PLATFORM.md
 // section 8.5): GCSE and instruction scheduling cost 27 % of the compile
-// time for 0.8 % of code size.
+// time for 0.8 % of code size. P3P3DS: -O2 since 2026-10-14 (as P3P_AOT_OPT in
+// platform/3ds/CMakeLists.txt): about 20 % less game-code time per draw in
+// Persona's dungeon on the New 3DS (docs/CURRENT_STATE.md 2026-10-14).
 constexpr const char *kCompileFlags =
     "-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -mword-relocations -ffunction-sections "
-    "-D__3DS__ -DNDEBUG -std=gnu++20 -Os -fno-gcse -fno-schedule-insns -fno-schedule-insns2 "
+    "-D__3DS__ -DNDEBUG -std=gnu++20 -O2 "
     "-DPSPRECOMP_AOT_PRODUCTION_FASTPATHS=1 -DPSPRECOMP_NO_FRONTIER_DIAGNOSTICS=1 -DPSPRECOMP_CHAIN_NOINLINE=1 "
     "-DPSPRECOMP_AOT_ASSUME_NO_WRITE_WATCH=1";
 constexpr const char *kArchFlags = "-march=armv6k -mtune=mpcore -mfloat-abi=hard -mtp=soft -mword-relocations";
