@@ -1003,6 +1003,13 @@ int main() {
         stage = "init gpu";
         auto gpu = std::make_unique<p3p3ds::n3ds::GpuRenderer>();
         g_gpu = gpu.get();
+        // Persona3DS: unchanged textures are re-checked less often (GpuRenderer::set_texture_backoff); an empty
+        // sdmc:/persona3ds/tex_check_every_frame.txt checks every texture every frame, as before.
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/tex_check_every_frame.txt", "r")) {
+            gpu->set_texture_backoff(false);
+            std::fclose(f);
+            stats.cores += ", tex check every frame";
+        }
         // sdmc:/persona3ds/gpu_trace.txt present: presents and screen-space draws of the
         // first 1,200 presents (about 20 s) to sdmc:/persona3ds/gpu_trace.log.
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/gpu_trace.txt", "r")) {

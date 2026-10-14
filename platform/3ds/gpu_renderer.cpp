@@ -503,7 +503,11 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
         key = (key ^ regs.clut_hash) * 0x100000001B3ull; // palette hash computed at LOADCLUT
     }
     auto it = textures_.find(key);
-    if (it != textures_.end() && it->second.checked_frame == frame_) {
+    // P3P3DS: a texture unchanged for a while is hashed again only from next_check on (set_texture_backoff);
+    // movie pictures (write generation) and EDRAM textures are checked every frame.
+    if (it != textures_.end() && (it->second.checked_frame == frame_ ||
+                                  (texture_backoff_ && !it->second.movie && frame_ < it->second.next_check &&
+                                   (canonical & 0x0F000000u) != 0x04000000u))) {
         ++gpu_stats_.texture_hits;
     } else {
         const u64 hash_start = svcGetSystemTick();
@@ -511,12 +515,16 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
         // every frame: GE hash 12-18 % of the time, bound by memory reads) is compared by its write
         // generation instead of a hash of its contents (fork_movie.hpp note_picture_write).
         std::uint64_t generation = 0;
-        const std::uint64_t hash = info.format == 3u && !info.swizzled && hle::media::picture_write_generation(info.address, info.stride, generation)
-                                       ? 0x4D4F564945000000ull ^ (generation * 0x9E3779B97F4A7C15ull)
-                                       : ge::texture_hash(memory, regs, info);
+        const bool movie = info.format == 3u && !info.swizzled && hle::media::picture_write_generation(info.address, info.stride, generation);
+        const std::uint64_t hash = movie ? 0x4D4F564945000000ull ^ (generation * 0x9E3779B97F4A7C15ull)
+                                         : ge::texture_hash(memory, regs, info);
         gpu_stats_.hash_ticks += svcGetSystemTick() - hash_start;
         if (it != textures_.end() && it->second.hash == hash) {
             it->second.checked_frame = frame_;
+            // P3P3DS: back off: 1 frame until 8 unchanged checks, then 2, 4 (16+), 8 (32+)
+            const std::uint32_t stable = ++it->second.stable;
+            it->second.next_check = frame_ + (stable < 8u ? 1u : stable < 16u ? 2u : stable < 32u ? 4u : 8u);
+            it->second.movie = movie;
             ++gpu_stats_.texture_hits;
         } else {
             if (it != textures_.end()) { // contents changed: never rewrite a texture the GPU may still read
@@ -571,6 +579,8 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
             entry.height = th;
             entry.bytes = bytes;
             entry.checked_frame = frame_;
+            entry.next_check = frame_ + 1u; // P3P3DS: a new or changed texture is checked every frame
+            entry.movie = movie;
             texture_bytes_ += bytes;
             ++gpu_stats_.texture_uploads;
             if (draw_trace_ != nullptr) // P3P3DS: draw trace

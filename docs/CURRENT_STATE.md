@@ -2,6 +2,17 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Core 2 per scene; unchanged textures re-checked less often (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `e145bac4` (GE-worker columns) (`profile_seconds.csv`; boot, opening movie, title screen, save loaded, isometric room, school dungeon), per scene:
+  - Opening movie (rows 17-28): 79-85 % speed, 48-52 frames/s; core 2 only 23-25 % busy, of it texture upload 22 %; the game's thread waits in `sceGeDrawSync` 220-239 ms/s and spends 197-248 ms/s in `sceMpeg`. [INFERRED] the 1 MiB picture upload (about 4.4 ms per picture) sits between the game's draw and its `sceGeDrawSync`: latency, not core-2 load.
+  - Title screen (rows 30-42): 75-84 % speed, about 2,370 draws/s (48 per frame); core 2 77-79 % busy, of it texture hashing 43-46 % and waiting for the PICA200 26-28 %; `sceGeDrawSync` 709-749 ms/s. The title screen is limited by core 2, mostly by re-hashing its textures every frame.
+  - Isometric room (rows 50-59): 100 % speed, core 2 about 64 % busy (hash 32 %).
+  - School dungeon (rows 63-74): 74-99 % speed, 21.8-26.3k draws/s; core 2 75-81 % busy (hash 9-12 %, PICA wait 14-16 %); `sceGeDrawSync` 108-172 ms/s; main core `aot 66-72`.
+- [VERIFIED] cause of the per-frame hashing, by the code (`platform/3ds/gpu_renderer.cpp` `bind_texture` before this change): every cached texture whose `checked_frame` is not the current frame is hashed in full (`ge::texture_hash`, 8 bytes per 64-bit mix) on its first use in each frame; a 32-bit hash did not help before (memory-bound, entry of 2026-10-11), so the bytes read must go down.
+- Change (`gpu_renderer.*`, `P3P3DS:`): a texture found unchanged by 8 checks in a row is re-hashed every 2nd frame, after 16 every 4th, after 32 every 8th (`CachedTexture::stable`, `next_check`); a changed texture becomes a new entry checked every frame again. Movie pictures (write generation) and textures in EDRAM are still checked every frame. [INFERRED] cost: a texture the game rewrites after it was unchanged for 32+ frames can show its old contents for up to 8 frames (e.g. a glyph cache gaining characters); an empty `sdmc:/persona3ds/tex_check_every_frame.txt` turns this off (report `cores: ..., tex check every frame`).
+- [UNVERIFIED] on the New 3DS: `gpu_hash_pct` on the title screen well below 45 % and its speed up; dungeon `hash` below 12 %.
+
 ## Lists on core 2 confirmed: dungeon near full speed; where the remaining time goes (2026-10-13)
 
 - [VERIFIED] Maintainer's New 3DS on `68869857` (label `595ea75e`, report `cores: ... GE on core2, lists on core2`): no crash, hang or visible glitch reported ("getting better"); whole run 94 % of real time, 40.0 game frames/s at 60 vblank/s. School dungeon `profile_seconds.csv` rows 41-52 and 65-84: 20.8-26.0k stall updates/s (16.6-21.2k on `0fcfaf52`), speed 71-102 %, mostly 85-100 %; `sceGeListUpdateStallAddr` 2.7-2.9 us per call (about 16-21 us before); main core `aot 61-74 hle 23-33 ge 0`. Report last 10 s: 95 %, `aot 69 hle 26 idle 4`, `gpu thd: busy 69`, renderer `hash 12.1 wait 10.2`, `draw: prep 29.7`, `ge in: draw 21.8k /s`.
