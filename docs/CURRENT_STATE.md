@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Core 2 per-draw prep split (measurement) (2026-10-14)
+
+- Why: with `-O2` the dungeon's remaining dips are seconds where core 2 is 80-84 % busy; `draw: prep` (target, texture, fragment state and batch handling before each model draw's vertices) is its largest step, 17-30 % of the time (report on `40426994` with `-O2`: `prep 20.6 vtx 4.7 unif 4.9 sub 2.7`, `gpu thd: busy 70 wait 14.0`).
+- Change (`platform/3ds/gpu_renderer.*`, `main.cpp`; measurement only): model-draw prep is timed in five sampled parts like `prep_ticks`: target/frame (`begin_frame`, target lookup and bind), texture lookup (`bind_texture`), batch signature (build and compare, index room), the previous batch's submit (`flush_batch`) and fragment state (texture parameters, `apply_fragment_state`, texture bind, scissor). Report line ` prep: target T tex X sig S flush F state E` under `draw:`.
+- [UNVERIFIED] which part dominates; the next change targets it.
+
 ## Game code at -O2: about 20 % less main-core time per draw in the dungeon (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on master `40426994` built with `-DP3P_AOT_OPT=-O2` (no code change): `.3dsx` 29,793,508 bytes, boots and plays (opening movie, title, save, school dungeon); report `heap: 73028 KiB in use: 53263 KiB` (77,216 KiB heap with the `-Os` flags: the code is about 4.2 MiB larger), `failed alloc: none`.

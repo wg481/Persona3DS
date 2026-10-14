@@ -191,6 +191,7 @@ std::uint64_t profile_ticks() noexcept { return svcGetSystemTick(); }
 struct TimeSample {
     u64 wall{}, present{}, idle{}, ui{}, hash{}, upload{}, wait{};
     u64 prep{}, vertex{}, uniform{}, submit{}; // GPU renderer steps (GpuStats)
+    u64 prep_target{}, prep_tex{}, prep_sig{}, prep_flush{}, prep_state{}; // Persona3DS: prep of model draws split
     u64 fill{};                                // model vertices into the arena (part of vertex)
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
     double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
@@ -513,6 +514,11 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
         t.vertex = g.vertex_ticks;
         t.uniform = g.uniform_ticks;
         t.submit = g.submit_ticks;
+        t.prep_target = g.prep_target_ticks; // Persona3DS
+        t.prep_tex = g.prep_tex_ticks;
+        t.prep_sig = g.prep_sig_ticks;
+        t.prep_flush = g.prep_flush_ticks;
+        t.prep_state = g.prep_state_ticks;
         t.fill = g.fill_ticks;
         if (g_async != nullptr) {
             const auto &a = g_async->async_stats();
@@ -581,6 +587,11 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
     if (draws) {
         std::snprintf(buf, sizeof buf, " draw: prep %.1f vtx %.1f unif %.1f sub %.1f\n", pct(ticks_to_s(b.prep - a.prep)),
                       pct(ticks_to_s(b.vertex - a.vertex)), pct(ticks_to_s(b.uniform - a.uniform)), pct(ticks_to_s(b.submit - a.submit)));
+        text += buf;
+        // Persona3DS: prep of model draws: target/frame, texture lookup, batch signature, previous batch's submit, state.
+        std::snprintf(buf, sizeof buf, " prep: target %.1f tex %.1f sig %.1f flush %.1f state %.1f\n", pct(ticks_to_s(b.prep_target - a.prep_target)),
+                      pct(ticks_to_s(b.prep_tex - a.prep_tex)), pct(ticks_to_s(b.prep_sig - a.prep_sig)), pct(ticks_to_s(b.prep_flush - a.prep_flush)),
+                      pct(ticks_to_s(b.prep_state - a.prep_state)));
         text += buf;
         // fill: model vertices into the arena (cache copy or unpack), part of vtx.
         const double uses = b.vc_uses - a.vc_uses;
