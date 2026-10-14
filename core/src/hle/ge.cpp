@@ -1,4 +1,5 @@
 #include "p3p3ds/hle/ge.hpp"
+#include "p3p3ds/ge/async_renderer.hpp" // P3P3DS: display lists on the GE worker
 #include "p3p3ds/ge/geometry.hpp"
 #include "p3p3ds/profile.hpp"
 #include "p3p3ds/kernel_state.hpp"
@@ -50,12 +51,17 @@ std::int32_t GeManager::enqueue_list(psprecomp::Runtime &rt, std::uint32_t start
         }
     }
     // Drop the oldest completed lists (none is referenced here).
-    while (lists_.size() >= kKeptLists && lists_.begin()->second.status==GeStatus::Completed) lists_.erase(lists_.begin());
+    if(!async_) while (lists_.size() >= kKeptLists && lists_.begin()->second.status==GeStatus::Completed) lists_.erase(lists_.begin());
     const int id=next_id_++;
     ++enqueued_;
     GeListInfo list; list.id=id; list.list_address=start; list.pc=start&0x0FFFFFFF;
     list.stall_address=stall&0x0FFFFFFF; list.callback_id=cb; list.opt_param=opt;
     list.context_address=context; list.stack_count=stack_count; list.stack_address=stack;
+    if(async_) { // P3P3DS: the worker adds the list and runs it
+        async_->post_task(&GeManager::worker_task,this,1u,head?1u:0u,0u,new GeListInfo(list));
+        if(host_profile().enabled && enqueue_end_==0) enqueue_end_=profile_now(host_profile());
+        return id;
+    }
     lists_.emplace(id,list); head ? queue_.push_front(id) : queue_.push_back(id);
     rt.event("ge_enqueue", {{"list",static_cast<unsigned>(id)}, {"start",start}, {"stall",stall}, {"callback",static_cast<std::uint32_t>(cb)}});
     if (rt.frontier_diagnostics) std::cout << "[GE ENQUEUE] id=" << id << " start=" << psprecomp::hex32(start)
@@ -67,6 +73,12 @@ std::int32_t GeManager::enqueue_list(psprecomp::Runtime &rt, std::uint32_t start
     return id;
 }
 std::int32_t GeManager::update_stall(psprecomp::Runtime &rt, int id, std::uint32_t stall) {
+    if(async_) { // P3P3DS: the worker applies it; [INFERRED] a completed list's update returns 0, not `already`
+        if(id<=0 || id>=next_id_) return invalid_id;
+        if(stall&3) return invalid_pointer;
+        async_->post_task(&GeManager::worker_task,this,2u,static_cast<std::uint32_t>(id),stall&0x0FFFFFFF,nullptr);
+        return 0;
+    }
     auto i=lists_.find(id); if(i==lists_.end()) return invalid_id;
     if(i->second.status==GeStatus::Completed) return already;
     if(stall&3) return invalid_pointer;
@@ -76,13 +88,14 @@ std::int32_t GeManager::update_stall(psprecomp::Runtime &rt, int id, std::uint32
 }
 std::int32_t GeManager::sync(psprecomp::Runtime &rt, int id, int mode, bool all) {
     if(mode!=0 && mode!=1) return invalid_mode;
+    quiesce(rt); // P3P3DS: lists running on the worker are done (as far as their stall addresses go)
     if(!all && !find(id)) return invalid_id;
     if(enqueue_end_!=0 && mode==0) { // the game waits for the GE: guest time since the first unsynced enqueue
         auto &p=host_profile();
         if(p.enabled) { p.ge_window_ns+=profile_now(p)-enqueue_end_; ++p.ge_windows; }
         enqueue_end_=0;
     }
-    pump(rt);
+    if(!async_) pump(rt); // P3P3DS: with a worker, quiesce ran the lists
     renderer_->drain(); // the game waits for the GE: an asynchronous back end must be done, as the PSP GE would be
     const auto status=all ? (queue_.empty()?GeStatus::Completed:lists_.at(queue_.front()).status) : find(id)->status;
     if(mode==0 && status!=GeStatus::Completed) {
@@ -235,8 +248,11 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
         const auto count=arg&0xFFFF, type=(arg>>16)&7;
         if(type==7) { rt.stop("GE PRIM type 7 unsupported"); return; }
         if(census) count_features(type);
+        if(active_!=renderer_.get()) { if(!skip_rasterization) active_->draw(mem,regs_,static_cast<ge::Prim>(type),count,state_.vertex,state_.index); } // P3P3DS: on the GE worker, not the game's thread's time
+        else {
         const SampledProfileScope timer(host_profile().render_ns, host_profile().render_calls); // thousands per frame: sampled
-        if(!skip_rasterization) renderer_->draw(mem,regs_,static_cast<ge::Prim>(type),count,state_.vertex,state_.index);
+        if(!skip_rasterization) active_->draw(mem,regs_,static_cast<ge::Prim>(type),count,state_.vertex,state_.index); // P3P3DS: active_
+        }
         if(draw_log) log_draw(mem,type,count);
         const auto layout=ge::vertex_layout(regs_.reg[0x12]);
         if(layout.index_format) state_.index+=count*(layout.index_format==1?1u:2u);
@@ -305,18 +321,27 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
             std::snprintf(key,sizeof key,"transfer_%s_to_%s",(src&0x0F000000u)==0x04000000u?"edram":"ram",(dst&0x0F000000u)==0x04000000u?"edram":"ram");
             ++features_[key];
         }
-        const ProfileScope timer(host_profile().render_ns, host_profile().render_calls); if(!skip_rasterization) renderer_->transfer(mem,regs_); break;
+        if(active_!=renderer_.get()) { if(!skip_rasterization) active_->transfer(mem,regs_); break; } // P3P3DS: on the GE worker, untimed
+        const ProfileScope timer(host_profile().render_ns, host_profile().render_calls); if(!skip_rasterization) active_->transfer(mem,regs_); break; // P3P3DS: active_
     }
     default: break;
     }
     l.pc+=4;
 }
 
-void GeManager::pump(psprecomp::Runtime &rt) {
+void GeManager::pump(psprecomp::Runtime &rt) { pump_impl(rt,false); }
+// P3P3DS: worker=true runs on the GE worker (set_async_executor): commands that must run on the
+// game's thread (worker_needs_main) stop it at that command and set async_pending_. On the game's
+// thread with a worker, at most one command runs (the one the worker left), then the worker goes on.
+void GeManager::pump_impl(psprecomp::Runtime &rt, bool worker) {
+    active_=worker ? &async_->inner() : renderer_.get();
+    const bool one_step=!worker && async_!=nullptr;
+    struct Continue { GeManager *g; bool on; ~Continue(){ if(on && g->async_ && !g->queue_.empty()) g->async_->post_task(&GeManager::worker_task,g,3u,0u,0u,nullptr); } } go_on{this,one_step};
     // Whenever execution returns to the guest, the renderer must be done with guest memory.
-    struct SyncOnExit { ge::GeRenderer *r; ~SyncOnExit(){ r->sync(); } } sync_on_exit{renderer_.get()};
+    struct SyncOnExit { ge::GeRenderer *r; ~SyncOnExit(){ r->sync(); } } sync_on_exit{active_};
     std::uint64_t budget=4u<<20;
     auto &mem=rt.memory();
+    auto leave=[&]{ async_pending_.store(true,std::memory_order_release); };
     while(!queue_.empty() && !rt.stopped()) {
         const int id=queue_.front();
         auto &l=lists_.at(id);
@@ -326,18 +351,20 @@ void GeManager::pump(psprecomp::Runtime &rt) {
         while(true) {
             if(l.pc==l.stall_address && l.stall_address) { l.status=GeStatus::Stalled; return; }
             l.status=GeStatus::Running;
-            if(!budget--) {rt.stop("GE command budget exceeded");return;}
-            if((l.pc&3) || !mem.contains(l.pc,4)) {rt.stop("GE invalid command fetch at "+psprecomp::hex32(l.pc));return;}
+            if(!budget--) { if(worker) { leave(); return; } rt.stop("GE command budget exceeded");return;}
+            if((l.pc&3) || !mem.contains(l.pc,4)) { if(worker) { leave(); return; } rt.stop("GE invalid command fetch at "+psprecomp::hex32(l.pc));return;}
             const auto word=mem.aot_load32(l.pc), op=word>>24;
+            if(worker && worker_needs_main(l,word)) { leave(); return; }
             ++l.commands;
             ++host_profile().ge_commands;
             if(op==0x0C) { // END (after FINISH: completion; after SIGNAL: continue)
                 l.pc+=4;
-                if(l.previous==0x0E) { l.previous=op; continue; }
+                if(l.previous==0x0E) { l.previous=op; if(one_step) return; continue; }
                 ++l.completions; l.status=GeStatus::Completed;
                 queue_.pop_front();
                 rt.event("ge_finish", {{"list",l.id},{"ge_pc",l.pc},{"commands",l.commands},{"completions",l.completions}});
-                if(l.previous==0x0F) { renderer_->sync(); deliver_finish_callback(rt,l,l.pc); }
+                if(l.previous==0x0F) { active_->sync(); deliver_finish_callback(rt,l,l.pc); }
+                if(one_step) return; // P3P3DS: the worker goes on (Continue)
                 break;
             }
             { // P3P3DS: every 16th command timed per opcode (HostProfile::ge_op_units)
@@ -349,9 +376,64 @@ void GeManager::pump(psprecomp::Runtime &rt) {
                 } else execute(rt,l,word);
             }
             l.previous=op;
+            if(one_step) return; // P3P3DS: the worker goes on (Continue)
             if(rt.stopped() || queue_.empty() || queue_.front()!=id) break;
         }
     }
+}
+
+// P3P3DS: worker execution of display lists (set_async_executor).
+GeManager::~GeManager() { if(async_) async_->drain(); }
+void GeManager::set_async_executor(psprecomp::Runtime &rt, ge::AsyncRenderer *async) {
+    async_=async!=nullptr && async->threaded() ? async : nullptr;
+    async_rt_=&rt;
+}
+// Commands the worker leaves to the game's thread: list completion (finish callback, guest code),
+// SIGNAL, anything that stops the runtime or records an event, and diagnostics (census, draw log).
+bool GeManager::worker_needs_main(const GeListInfo &l, std::uint32_t word) const {
+    switch(word>>24) {
+    case 0x0C: return l.previous!=0x0E; // END: completion (after SIGNAL it only continues)
+    case 0x0E: case 0x05: case 0x06: return true;
+    case 0x04: return ((word>>16)&7u)==7u || !writer_observed_ || census || draw_log!=nullptr;
+    case 0x0A: return l.call_stack.size()>=32u;
+    case 0x0B: return l.call_stack.empty();
+    case 0xEA: return census;
+    default: return false;
+    }
+}
+// On the worker. kind 1: enqueue (p: the new GeListInfo, a: head), 2: stall update (a: id, b: stall),
+// 3: continue after the game's thread ran what the worker left.
+void GeManager::worker_task(void *self, std::uint32_t kind, std::uint32_t a, std::uint32_t b, void *p) {
+    auto &g=*static_cast<GeManager *>(self);
+    auto &rt=*g.async_rt_;
+    if(kind==1u) {
+        std::unique_ptr<GeListInfo> list(static_cast<GeListInfo *>(p));
+        while (g.lists_.size() >= kKeptLists && g.lists_.begin()->second.status==GeStatus::Completed) g.lists_.erase(g.lists_.begin());
+        const int id=static_cast<int>(list->id);
+        g.lists_.emplace(id,*list); a ? g.queue_.push_front(id) : g.queue_.push_back(id);
+    } else if(kind==2u) {
+        auto i=g.lists_.find(static_cast<int>(a));
+        if(i==g.lists_.end() || i->second.status==GeStatus::Completed) return;
+        i->second.stall_address=b;
+    }
+    if(g.async_pending_.load(std::memory_order_acquire) || rt.stopped()) return; // the game's thread runs the front list first
+    g.pump_impl(rt,true);
+}
+void GeManager::service(psprecomp::Runtime &rt) {
+    if(!async_ || in_service_ || !async_pending_.load(std::memory_order_acquire)) return;
+    in_service_=true;
+    async_->drain();
+    while(async_pending_.load(std::memory_order_acquire) && !rt.stopped()) {
+        async_pending_.store(false,std::memory_order_release);
+        pump_impl(rt,false); // one command, then the worker goes on
+        async_->drain();
+    }
+    in_service_=false;
+}
+void GeManager::quiesce(psprecomp::Runtime &rt) {
+    if(!async_) return;
+    async_->drain();
+    service(rt);
 }
 
 void GeManager::report() const {
@@ -377,14 +459,16 @@ void register_ge_module(psprecomp::Runtime &runtime, KernelState &kernel) {
     // sceGeGetMtx); out-of-range index -> SCE_ERROR_INVALID_INDEX (0x80000102).
     // P3P reads them for the battle-transition effect (first Shadow, New 3DS).
     // [INFERRED] the command register holds the whole word (opcode << 24 | argument).
-    runtime.register_hle("sceGe_user",0xDC93CFEFu,[&kernel](auto &,auto &c){
+    runtime.register_hle("sceGe_user",0xDC93CFEFu,[&kernel](auto &r,auto &c){
         const auto cmd=c.gpr[4];
         if(cmd>=0xFFu) { c.set_gpr(2,0x80000102u); return; }
+        kernel.ge().quiesce(r); // P3P3DS
         c.set_gpr(2,(cmd<<24)|(kernel.ge().registers().reg[cmd]&0xFFFFFFu));
     });
     runtime.register_hle("sceGe_user",0x57C8945Bu,[&kernel](auto &r,auto &c){
         const auto id=static_cast<std::int32_t>(c.gpr[4]); const auto out=c.gpr[5];
         if(id<0 || id>=12) { c.set_gpr(2,0x80000102u); return; }
+        kernel.ge().quiesce(r); // P3P3DS
         const auto &g=kernel.ge().registers();
         const float *m=id==10?g.proj.data():id==11?g.tgen.data():id==8?g.world.data():id==9?g.view.data():&g.bone[static_cast<std::size_t>(id)*12u];
         const unsigned n=id==10?16u:12u;

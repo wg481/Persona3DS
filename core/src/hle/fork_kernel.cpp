@@ -340,6 +340,9 @@ std::int32_t run_stall_update(psprecomp::Runtime &rt, int id, std::uint32_t stal
 // Before every HLE import except sceGeListUpdateStallAddr itself: the import sees the GE as if
 // every recorded update had run (GE waits, GE queries, display, thread switches, I/O).
 void ge_stall_pre_import(psprecomp::Runtime &rt, psprecomp::AllegrexContext &, std::string_view library, std::uint32_t nid) {
+    // Display lists on the GE worker (GeManager::set_async_executor): what the worker left for the game's
+    // thread (list completion and its finish callback, SIGNAL, errors) runs before the next import.
+    if (g_fork_kernel != nullptr && g_fork_kernel->ge().async_pending()) g_fork_kernel->ge().service(rt);
     if (!g_ge_batch.pending || (nid == 0xE0D68148u && library == "sceGe_user")) return;
     ++ge_stall_timing().by_import;
     flush_ge_stall(rt);
@@ -383,7 +386,8 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
         auto &b = g_ge_batch;
         const int id = static_cast<int>(ctx.gpr[4]);
         const std::uint32_t stall = ctx.gpr[5];
-        const auto *list = kernel.ge().find(id);
+        // With display lists on the GE worker the list table belongs to the worker: no census, no batching.
+        const auto *list = kernel.ge().async_execution() ? nullptr : kernel.ge().find(id);
         ++t.calls;
         if (t.detail && list != nullptr) { // released words, before running them (from the pending stall when one is recorded)
             auto &m = rt.memory();

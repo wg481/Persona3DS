@@ -516,7 +516,7 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
             const auto &a = g_async->async_stats();
             t.gpu_busy = a.busy.load(std::memory_order_relaxed);
             t.gpu_wait = a.drain_wait + a.full_wait;
-            t.ge_draws = static_cast<double>(a.draws);
+            t.ge_draws = static_cast<double>(g_gpu->stats().prims); // Persona3DS: every draw, also those of lists run on the worker
             t.ge_states = static_cast<double>(a.states);
             t.ge_cluts = static_cast<double>(a.cluts);
         }
@@ -597,7 +597,7 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         else
             std::snprintf(buf, sizeof buf, " gpu thd: off\n");
         text += buf;
-        // Persona3DS: GE work per second: display-list commands executed on the game's thread, draws
+        // Persona3DS: GE work per second: display-list commands executed (on the game's thread, or on core 2), draws
         // handed to the renderer, state snapshots and CLUT copies queued for the worker (the dungeon
         // spends most of its time in sceGeListUpdateStallAddr: which part of it).
         std::snprintf(buf, sizeof buf, " ge in: cmd %.1fk draw %.1fk st %.1fk clut %.1fk /s\n", (b.ge_cmds - a.ge_cmds) / s.wall / 1000.0,
@@ -1038,6 +1038,17 @@ int main() {
             else kernel.ge().set_renderer(std::move(gpu));
         }
         stats.cores += g_async != nullptr ? ", GE on core2" : ", GE on core0";
+        // Persona3DS: display lists also run on core 2 (GeManager::set_async_executor): the game's core only
+        // queues them. An empty sdmc:/persona3ds/ge_sync.txt keeps them on the game's core (as before); stall
+        // batching (ge_batch.txt) needs them there too.
+        if (g_async != nullptr && stats.cores.find(", GE batch") == std::string::npos) {
+            bool lists_on_worker = true;
+            if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/ge_sync.txt", "r")) { lists_on_worker = false; std::fclose(f); }
+            if (lists_on_worker) {
+                kernel.ge().set_async_executor(rt, g_async);
+                stats.cores += ", lists on core2";
+            }
+        }
         rt.memory().vram_write_observer = [](std::uint32_t address, std::size_t bytes) { gpu_note_cpu_write(address, bytes); };
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/play_movies.txt", "r")) { stats.skip_movies = false; std::fclose(f); }
         if (FILE *f = std::fopen(autotest.active ? P3P_PROFILE_SD_BASE "/autotest/dump_every.txt" : P3P_PROFILE_SD_BASE "/dump_every.txt", "r")) {

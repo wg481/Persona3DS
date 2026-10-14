@@ -732,6 +732,143 @@ void test_ge_marked_state_through_queue() {
     CHECK(queued == direct);
 }
 
+// P3P3DS: display lists executed on the GE worker (GeManager::set_async_executor) reach the renderer
+// with the same calls, registers and matrices as on the game's thread, through enqueue, stall updates,
+// CALL/RET, JUMP, SIGNAL+END, FINISH+END (completion on the game's thread), a second list, sceGeGetCmd
+// and sceGeDrawSync; the game's thread may queue work while the worker runs.
+void test_ge_async_execution() {
+    struct Recorder final : p3p3ds::ge::GeRenderer {
+        std::vector<std::uint64_t> log;
+        p3p3ds::ge::DrawStats s;
+        void note(const p3p3ds::ge::GeRegisters &r, std::uint64_t what) {
+            std::uint64_t h = 0xCBF29CE484222325ull ^ what;
+            auto mix = [&h](const void *q, std::size_t n) {
+                const auto *b = static_cast<const std::uint8_t *>(q);
+                for (std::size_t i = 0; i < n; ++i) h = (h ^ b[i]) * 0x100000001B3ull;
+            };
+            mix(r.reg.data(), sizeof r.reg);
+            mix(r.bone.data(), sizeof r.bone);
+            mix(r.world.data(), sizeof r.world);
+            mix(r.view.data(), sizeof r.view);
+            mix(r.tgen.data(), sizeof r.tgen);
+            mix(r.proj.data(), sizeof r.proj);
+            mix(r.clut.data(), sizeof r.clut);
+            log.push_back(h);
+        }
+        void draw(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r, p3p3ds::ge::Prim p, std::uint32_t c, std::uint32_t v, std::uint32_t i) override {
+            note(r, (static_cast<std::uint64_t>(p) << 56) ^ (static_cast<std::uint64_t>(c) << 32) ^ v ^ (static_cast<std::uint64_t>(i) << 8));
+        }
+        void transfer(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r) override { note(r, 0x7777u); }
+        const p3p3ds::ge::DrawStats &stats() const override { return s; }
+    };
+    struct Result { std::vector<std::uint64_t> log; std::vector<std::uint32_t> cmds; std::uint32_t sync{}; bool stopped{}; };
+    // mode 0: lists on the game's thread, direct renderer; 1: game's thread + queued renderer; 2: worker.
+    // census: the PC builds' per-draw census, which keeps every PRIM on the game's thread (the 3DS has none).
+    auto run = [](int mode, bool census) {
+        psprecomp::Runtime rt;
+        p3p3ds::KernelState kernel;
+        p3p3ds::hle::register_all_hle_modules(rt, kernel);
+        kernel.ge().census = census;
+        auto rec = std::make_unique<Recorder>();
+        Recorder *seen = rec.get();
+        std::thread worker;
+        if (mode == 0) kernel.ge().set_renderer(std::move(rec));
+        else {
+            p3p3ds::ge::WorkerHooks hooks;
+            hooks.start = [&worker](void (*entry)(void *), void *arg) { worker = std::thread(entry, arg); return true; };
+            hooks.join = [&worker] { if (worker.joinable()) worker.join(); };
+            hooks.pause = [] { std::this_thread::yield(); };
+            auto async = std::make_unique<p3p3ds::ge::AsyncRenderer>(std::move(rec), 0, std::move(hooks));
+            auto *a = async.get();
+            kernel.ge().set_renderer(std::move(async));
+            if (mode == 2) kernel.ge().set_async_executor(rt, a);
+            CHECK(kernel.ge().async_execution() == (mode == 2));
+        }
+        auto &m = rt.memory();
+        constexpr std::uint32_t kA = 0x08A40000u, kSub = 0x08A80000u, kB = 0x08AC0000u, kVerts = 0x08B00000u, kPal = 0x08B80000u;
+        std::uint32_t seed = 4242u;
+        const auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+        for (std::uint32_t k = 0; k < 256u; ++k) m.store32(kPal + 4u * k, rnd());
+        // Subroutine: a few registers, a matrix word, a draw, RET.
+        std::uint32_t sp = kSub;
+        const auto sub = [&](std::uint32_t w) { m.store32(sp, w); sp += 4u; };
+        sub(0x3A000000u); sub(0x3B000000u | 0x123456u); sub(0x21000001u); sub(0x10000000u | ((kVerts >> 8) & 0x0F0000u));
+        sub(0x01000000u | (kVerts & 0xFFFFFFu)); sub(0x04030003u); sub(0x0B000000u);
+        std::uint32_t pc = kA;
+        const auto put = [&](std::uint32_t w) { m.store32(pc, w); pc += 4u; };
+        put(0x12000000u | 0x11Cu);
+        rt.cpu().set_gpr(4, kA); rt.cpu().set_gpr(5, kA); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+        rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+        const auto id = rt.cpu().gpr[2];
+        static constexpr std::uint8_t kMatrix[] = {0x2A, 0x2B, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41};
+        for (int update = 0; update < 400; ++update) {
+            const std::uint32_t kind = rnd() % 16u;
+            if (kind == 0u) { // CALL the subroutine
+                put(0x10000000u | ((kSub >> 8) & 0x0F0000u));
+                put(0x0A000000u | (kSub & 0xFFFFFFu));
+            } else if (kind == 1u) { // JUMP over one garbage word
+                put(0x10000000u | (((pc + 8u) >> 8) & 0x0F0000u));
+                put(0x08000000u | ((pc + 8u) & 0xFFFFFFu));
+                put(0x05FFFFFFu); // BEZIER: would stop the runtime if executed
+            } else if (kind == 2u) { // SIGNAL + END: the list continues
+                put(0x0E010000u | (rnd() & 0xFFFFu));
+                put(0x0C000000u);
+            } else if (kind == 3u) { // LOADCLUT
+                put(0xB0000000u | (kPal & 0xFFFFF0u)); put(0xB1000000u | ((kPal >> 8) & 0x0F0000u)); put(0xC4000000u | (1u + rnd() % 32u));
+            } else {
+                for (int k = 0; k < 6; ++k) {
+                    std::uint32_t op;
+                    if (rnd() % 3u == 0u) op = kMatrix[rnd() % sizeof kMatrix];
+                    else { do op = 0x15u + rnd() % (0x100u - 0x15u); while (op == 0x12u || op == 0xC4u || op == 0xEAu || (op >= 0x2Au && op <= 0x41u)); }
+                    const std::uint32_t arg = op == 0x2Au ? rnd() % 96u : (op & 1u) == 0u && op >= 0x3Au && op <= 0x40u ? rnd() % 16u : rnd() & 0xFFFFFFu;
+                    put((op << 24) | arg);
+                }
+                put(0x10000000u | ((kVerts >> 8) & 0x0F0000u));
+                put(0x01000000u | (kVerts & 0xFFFFFFu));
+                put(0x04030003u); // one triangle
+            }
+            rt.cpu().set_gpr(4, id); rt.cpu().set_gpr(5, pc);
+            rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+            if (update == 200) { // the game reads a register back mid-frame
+                rt.cpu().set_gpr(4, 0x21u);
+                rt.invoke_import("sceGe_user", 0xDC93CFEFu, rt.cpu());
+            }
+        }
+        put(0x0F000000u); put(0x0C000000u); // FINISH, END: completion
+        rt.cpu().set_gpr(4, id); rt.cpu().set_gpr(5, pc);
+        rt.invoke_import("sceGe_user", 0xE0D68148u, rt.cpu());
+        // A second list, enqueued complete.
+        std::uint32_t pb = kB;
+        const auto putb = [&](std::uint32_t w) { m.store32(pb, w); pb += 4u; };
+        putb(0x21000000u); putb(0x10000000u | ((kVerts >> 8) & 0x0F0000u)); putb(0x01000000u | (kVerts & 0xFFFFFFu));
+        putb(0x04040004u); putb(0x0F000000u); putb(0x0C000000u);
+        rt.cpu().set_gpr(4, kB); rt.cpu().set_gpr(5, 0u); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+        rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+        rt.cpu().set_gpr(4, 0u);
+        rt.invoke_import("sceGe_user", 0xB287BD61u, rt.cpu()); // sceGeDrawSync(0)
+        Result res;
+        res.sync = rt.cpu().gpr[2];
+        for (std::uint32_t cmd : {0x12u, 0x21u, 0x3Bu, 0xA0u, 0xB0u}) {
+            rt.cpu().set_gpr(4, cmd);
+            rt.invoke_import("sceGe_user", 0xDC93CFEFu, rt.cpu());
+            res.cmds.push_back(rt.cpu().gpr[2]);
+        }
+        kernel.ge().renderer().drain();
+        res.stopped = rt.stopped();
+        res.log = seen->log;
+        kernel.ge().set_renderer(nullptr); // joins the worker
+        return res;
+    };
+    const Result direct = run(0, false), queued = run(1, false), on_worker = run(2, false), census_worker = run(2, true);
+    CHECK(!direct.stopped && !queued.stopped && !on_worker.stopped && !census_worker.stopped);
+    CHECK(direct.log.size() > 300u);
+    CHECK(queued.log == direct.log);
+    CHECK(on_worker.log == direct.log);
+    CHECK(census_worker.log == direct.log);
+    CHECK(on_worker.cmds == direct.cmds && census_worker.cmds == direct.cmds);
+    CHECK(on_worker.sync == direct.sync && direct.sync == 0u);
+}
+
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,
 // 480, 272} on the stack, frameWidth 512, dest = the second framebuffer.
 void test_mpeg_avc_csc() {
@@ -1209,6 +1346,7 @@ int main() {
     test_ge_stall_timing();
     test_ge_loadclut_fast_path();
     test_ge_marked_state_through_queue();
+    test_ge_async_execution();
     test_ge_stall_batching();
     test_mpeg_avc_csc();
     test_terminate_delete_thread();

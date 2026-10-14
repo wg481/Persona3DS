@@ -88,6 +88,11 @@ struct TransferPayload {
 struct CallPayload {
     std::function<void(GeRenderer &)> *fn;
 };
+struct TaskPayload { // P3P3DS: AsyncRenderer::post_task
+    AsyncRenderer::TaskFn fn;
+    void *ctx, *p;
+    std::uint32_t kind, a, b;
+};
 
 constexpr std::uint32_t round8(std::size_t n) { return static_cast<std::uint32_t>((n + 7u) & ~std::size_t{7}); }
 constexpr std::size_t kMinQueue = 64u << 10;
@@ -180,6 +185,12 @@ void AsyncRenderer::worker_loop() {
             std::memcpy(&c, payload, sizeof c);
             (*c.fn)(*inner_);
             delete c.fn;
+            break;
+        }
+        case Type::Task: { // P3P3DS
+            TaskPayload k;
+            std::memcpy(&k, payload, sizeof k);
+            k.fn(k.ctx, k.kind, k.a, k.b, k.p);
             break;
         }
         case Type::Stop:
@@ -335,6 +346,16 @@ void AsyncRenderer::post(std::function<void(GeRenderer &)> fn) {
     const CallPayload c{new std::function<void(GeRenderer &)>(std::move(fn))};
     push(Type::Call, &c, sizeof c);
     ++stats_.calls;
+}
+
+// P3P3DS: see the header.
+void AsyncRenderer::post_task(TaskFn fn, void *ctx, std::uint32_t kind, std::uint32_t a, std::uint32_t b, void *p) {
+    if (!threaded_) {
+        fn(ctx, kind, a, b, p);
+        return;
+    }
+    const TaskPayload k{fn, ctx, p, kind, a, b};
+    push(Type::Task, &k, sizeof k);
 }
 
 } // namespace p3p3ds::ge
