@@ -95,6 +95,10 @@ public:
     // 8th frame (title screen: hashing was 45 % of core 2; docs/CURRENT_STATE.md 2026-10-14). False:
     // every texture every frame, as before.
     void set_texture_backoff(bool on) { texture_backoff_ = on; }
+    // P3P3DS: frees every cached texture the current frame does not use (linear memory for another
+    // user, e.g. the movie decoder's 3 MiB work buffer); returns the bytes freed. Call it only while
+    // the renderer is idle (AsyncRenderer::call_idle).
+    std::uint32_t trim_textures() { const std::uint32_t before = texture_bytes_; evict_textures(kTrimAll); bound_tex_ = nullptr; return before - texture_bytes_; }
 
 private:
     // Screen vertex (CPU-transformed): v0 (x*w, y*w, z*w, w), v2 texels, v3 colour.
@@ -160,6 +164,7 @@ private:
     void close_run();
     void flush_batch();
     void evict_textures(std::uint32_t needed);
+    static constexpr std::uint32_t kTrimAll = 0xFFFFFFFFu >> 1; // P3P3DS: evict_textures(kTrimAll) frees all unused
 
     ge::DrawStats draw_stats_;
     GpuStats gpu_stats_;

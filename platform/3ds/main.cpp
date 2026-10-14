@@ -982,7 +982,13 @@ int main() {
         // Read-only and unchanged while the game runs: lookups cached (vfs.hpp).
         if (*p3p3ds::profile::mods_alias != '\0')
             kernel.io().alias(p3p3ds::profile::mods_alias, std::make_shared<p3p3ds::vfs::HostFileSystem>(std::string(kBase) + "/mods", true));
-        p3p3ds::n3ds::install_mvd_decoder(); // Persona3DS: converted movies on the hardware H.264 decoder
+        // Persona3DS: converted movies on the hardware H.264 decoder; when it cannot start for want of linear
+        // memory, the GPU renderer's textures unused by the current frame are freed and it tries once more.
+        p3p3ds::n3ds::install_mvd_decoder([] {
+            if (g_gpu == nullptr) return;
+            if (g_async != nullptr) (void)g_async->call_idle([](p3p3ds::ge::GeRenderer &) { return g_gpu->trim_textures(); });
+            else (void)g_gpu->trim_textures();
+        });
         // Persona3DS: the next movie picture is decoded on core 1 while the game runs (fork_core1.hpp);
         // an empty sdmc:/persona3ds/no_core1.txt keeps decoding on the game's core.
         {
