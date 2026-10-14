@@ -88,12 +88,21 @@ std::uint32_t to_rgba8(std::uint32_t c) {
 // to_rgba8(texel) at tiled_index(x, tiled_row(y, th), tw) for every texel (the per-texel loop below),
 // without computing a scattered address per texel: Persona's 512x512 movie texture took about 15 ms
 // per upload that way on the New 3DS (report: GE tex 19.9 % of the time at about 13 pictures/s).
-void upload_rgba8_tiled(const std::uint8_t *src, std::size_t stride, std::uint32_t *dst, std::uint32_t tw, std::uint32_t th) {
+// P3P3DS: rows != 0: only PSP rows 0..rows-1 plus one tile row below them are written (memory rows
+// th - n .. th - 1, the PSP rows being stored bottom-up); the rest of the texture is left as it is.
+// Persona's movie picture fills 272 rows of its 512-row texture (docs/CURRENT_STATE.md 2026-10-14).
+void upload_rgba8_tiled(const std::uint8_t *src, std::size_t stride, std::uint32_t *dst, std::uint32_t tw, std::uint32_t th,
+                        std::uint32_t rows = 0u) {
     static constexpr std::uint8_t kMorton[8][8] = { // [row in tile][column in tile] -> offset in the 8x8 tile
         {0, 1, 4, 5, 16, 17, 20, 21},     {2, 3, 6, 7, 18, 19, 22, 23},     {8, 9, 12, 13, 24, 25, 28, 29},
         {10, 11, 14, 15, 26, 27, 30, 31}, {32, 33, 36, 37, 48, 49, 52, 53}, {34, 35, 38, 39, 50, 51, 54, 55},
         {40, 41, 44, 45, 56, 57, 60, 61}, {42, 43, 46, 47, 58, 59, 62, 63}};
-    for (std::uint32_t tile_y = 0; tile_y < th; tile_y += 8u)
+    std::uint32_t start = 0;
+    if (rows != 0u && rows < th) {
+        start = th - std::min(th, (rows + 7u) / 8u * 8u + 8u);
+        dst += static_cast<std::size_t>(start) * tw; // tiled_index(0, start, tw): start is a multiple of 8
+    }
+    for (std::uint32_t tile_y = start; tile_y < th; tile_y += 8u)
         for (std::uint32_t tile_x = 0; tile_x < tw; tile_x += 8u, dst += 64) {
             for (std::uint32_t r = 0; r < 8u; ++r) {
                 const std::uint8_t *row = src + static_cast<std::size_t>(tiled_row(tile_y + r, th)) * stride + tile_x * 4u;
@@ -503,7 +512,11 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
         key = (key ^ regs.clut_hash) * 0x100000001B3ull; // palette hash computed at LOADCLUT
     }
     auto it = textures_.find(key);
-    if (it != textures_.end() && it->second.checked_frame == frame_) {
+    // P3P3DS: a texture unchanged for a while is hashed again only from next_check on (set_texture_backoff);
+    // movie pictures (write generation) and EDRAM textures are checked every frame.
+    if (it != textures_.end() && (it->second.checked_frame == frame_ ||
+                                  (texture_backoff_ && !it->second.movie && frame_ < it->second.next_check &&
+                                   (canonical & 0x0F000000u) != 0x04000000u))) {
         ++gpu_stats_.texture_hits;
     } else {
         const u64 hash_start = svcGetSystemTick();
@@ -511,12 +524,17 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
         // every frame: GE hash 12-18 % of the time, bound by memory reads) is compared by its write
         // generation instead of a hash of its contents (fork_movie.hpp note_picture_write).
         std::uint64_t generation = 0;
-        const std::uint64_t hash = info.format == 3u && !info.swizzled && hle::media::picture_write_generation(info.address, info.stride, generation)
-                                       ? 0x4D4F564945000000ull ^ (generation * 0x9E3779B97F4A7C15ull)
-                                       : ge::texture_hash(memory, regs, info);
+        std::uint32_t movie_rows = 0; // P3P3DS: rows the movie picture fills (upload only those)
+        const bool movie = info.format == 3u && !info.swizzled && hle::media::picture_write_generation(info.address, info.stride, generation, &movie_rows);
+        const std::uint64_t hash = movie ? 0x4D4F564945000000ull ^ (generation * 0x9E3779B97F4A7C15ull)
+                                         : ge::texture_hash(memory, regs, info);
         gpu_stats_.hash_ticks += svcGetSystemTick() - hash_start;
         if (it != textures_.end() && it->second.hash == hash) {
             it->second.checked_frame = frame_;
+            // P3P3DS: back off: 1 frame until 8 unchanged checks, then 2, 4 (16+), 8 (32+)
+            const std::uint32_t stable = ++it->second.stable;
+            it->second.next_check = frame_ + (stable < 8u ? 1u : stable < 16u ? 2u : stable < 32u ? 4u : 8u);
+            it->second.movie = movie;
             ++gpu_stats_.texture_hits;
         } else {
             if (it != textures_.end()) { // contents changed: never rewrite a texture the GPU may still read
@@ -538,11 +556,15 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
             // P3P3DS: unswizzled 8888 without padding (Persona's 512x512 movie texture, re-uploaded for every
             // picture: GE texture time 37 % in movies) is read straight from guest memory; decode_texture
             // gives the same values (little-endian texel words) through an extra pass.
+            // P3P3DS: a movie picture reads only its rows (+ one tile row), not the whole texture.
+            const std::uint32_t read_rows = movie && movie_rows != 0u && movie_rows < th && tw % 8u == 0u && th % 8u == 0u
+                                                ? std::min(th, (movie_rows + 7u) / 8u * 8u + 8u) : th;
             const std::uint8_t *direct = info.format == 3u && !info.swizzled && tw == info.width && th == info.height && fmt == GPU_RGBA8
-                                             ? memory.raw_pointer(info.address, static_cast<std::size_t>(info.stride) * 4u * (th - 1u) + tw * 4u)
+                                             ? memory.raw_pointer(info.address, static_cast<std::size_t>(info.stride) * 4u * (read_rows - 1u) + tw * 4u)
                                              : nullptr;
             if (direct != nullptr && tw % 8u == 0u && th % 8u == 0u) {
-                upload_rgba8_tiled(direct, static_cast<std::size_t>(info.stride) * 4u, static_cast<std::uint32_t *>(entry.tex.data), tw, th);
+                upload_rgba8_tiled(direct, static_cast<std::size_t>(info.stride) * 4u, static_cast<std::uint32_t *>(entry.tex.data), tw, th,
+                                   read_rows < th ? movie_rows : 0u);
             } else if (direct != nullptr) {
                 auto *dst = static_cast<std::uint32_t *>(entry.tex.data);
                 for (std::uint32_t y = 0; y < th; ++y) {
@@ -571,6 +593,8 @@ const C3D_Tex *GpuRenderer::bind_texture(psprecomp::GuestMemory &memory, const g
             entry.height = th;
             entry.bytes = bytes;
             entry.checked_frame = frame_;
+            entry.next_check = frame_ + 1u; // P3P3DS: a new or changed texture is checked every frame
+            entry.movie = movie;
             texture_bytes_ += bytes;
             ++gpu_stats_.texture_uploads;
             if (draw_trace_ != nullptr) // P3P3DS: draw trace

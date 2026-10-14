@@ -240,16 +240,37 @@ void async_renderer_checks(psprecomp::GuestMemory &m) {
         void sync() override { log.push_back(0x5555u); }
         const DrawStats &stats() const override { return s; }
     };
-    auto run = [&m](GeRenderer &target, Recorder *post_into, bool via_post) {
+    // tracked: writes are marked as GeManager does (GeRegisters::dirty), else AsyncRenderer compares words.
+    auto run = [&m](GeRenderer &target, Recorder *post_into, bool via_post, bool tracked = false) {
         std::uint32_t state = 0x9E3779B9u;
         auto next = [&state] { state = state * 1664525u + 1013904223u; return state >> 8; };
         GeRegisters r;
+        r.dirty_tracked = tracked;
+        auto set = [&r](std::uint32_t word, std::uint32_t value) { // one 32-bit word, by GeRegisters numbering
+            if (word < GeRegisters::kWordBone) r.reg[word] = value;
+            else {
+                const float f = static_cast<float>(value);
+                if (word < GeRegisters::kWordWorld) r.bone[word - GeRegisters::kWordBone] = f;
+                else if (word < GeRegisters::kWordView) r.world[word - GeRegisters::kWordWorld] = f;
+                else if (word < GeRegisters::kWordTgen) r.view[word - GeRegisters::kWordView] = f;
+                else if (word < GeRegisters::kWordProj) r.tgen[word - GeRegisters::kWordTgen] = f;
+                else r.proj[word - GeRegisters::kWordProj] = f;
+            }
+            r.mark(word);
+        };
         for (int i = 0; i < 6000; ++i) {
             const auto what = next() % 16u;
             if (what < 5u) { // a state change: registers, matrices, sometimes the CLUT (as GeManager does)
-                r.reg[next() % 256u] = next();
-                r.world[next() % 12u] = static_cast<float>(next());
-                r.bone[next() % 96u] = static_cast<float>(next());
+                set(next() % 256u, next());
+                set(GeRegisters::kWordWorld + next() % 12u, next());
+                set(GeRegisters::kWordBone + next() % 96u, next());
+                if (what == 1u) { // P3P3DS: every matrix reaches the worker (State records carry changed words only)
+                    set(GeRegisters::kWordView + next() % 12u, next());
+                    set(GeRegisters::kWordTgen + next() % 12u, next());
+                    set(GeRegisters::kWordProj + next() % 16u, next());
+                    const std::uint32_t from = next() % 256u;
+                    set(next() % 256u, r.reg[from]); // often no change at all
+                }
                 if (what == 0u) {
                     for (auto &w : r.clut) w = next();
                     r.clut_words = next() % 256u;
@@ -286,6 +307,19 @@ void async_renderer_checks(psprecomp::GuestMemory &m) {
         async.drain();
         check(queued->log == direct.log, "async renderer: replayed calls, registers and CLUT equal direct calls");
         check(async.async_stats().states < async.async_stats().draws, "async renderer: state sent only when it changed");
+    }
+    { // P3P3DS: the same with writes marked (GeRegisters::dirty), the path GeManager takes
+        std::thread worker2;
+        WorkerHooks hooks2;
+        hooks2.start = [&worker2](void (*entry)(void *), void *arg) { worker2 = std::thread(entry, arg); return true; };
+        hooks2.join = [&worker2] { if (worker2.joinable()) worker2.join(); };
+        hooks2.pause = [] { std::this_thread::yield(); };
+        auto inner2 = std::make_unique<Recorder>();
+        Recorder *queued2 = inner2.get();
+        AsyncRenderer async(std::move(inner2), 0, std::move(hooks2));
+        run(async, queued2, true, true);
+        async.drain();
+        check(queued2->log == direct.log, "async renderer: marked writes replay equal to direct calls");
     }
     AsyncRenderer fallback(std::make_unique<Recorder>(), 0, WorkerHooks{});
     check(!fallback.threaded(), "async renderer: no start hook -> direct calls");

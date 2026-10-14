@@ -14,6 +14,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace media = p3p3ds::hle::media;
@@ -295,6 +296,36 @@ void test_movie_read_ahead() {
     media::set_video_decoder_factory(nullptr);
 }
 
+// P3P3DS: decode-ahead on a background executor gives the same pictures in the same order (every unit
+// once, skips included), uses the pictures decoded ahead, and a track can be dropped while a task runs.
+void test_movie_decode_ahead() {
+    std::uint64_t tasks = 0;
+    media::set_background_executor([&tasks](void (*task)(void *), void *arg) {
+        ++tasks;
+        std::thread(task, arg).detach();
+        return true;
+    });
+    media::set_video_decoder_factory([](std::uint32_t, std::uint32_t) { return std::make_unique<FakeDecoder>(); });
+    auto track = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-"); // written by test_movie_read_ahead
+    check(track != nullptr && track->frames() == 301u, "decode-ahead movie opens");
+    bool all = track != nullptr;
+    for (std::uint32_t k = 0; all && k < 301u; k += (k % 7u == 3u ? 3u : 1u)) { // skips some pictures
+        const std::uint32_t *p = track->picture(k);
+        all = p != nullptr && p[0] == k % 251u && p[127] == k % 251u;
+        if (!all) check(false, "decode-ahead picture " + std::to_string(k) + " comes from its own unit");
+    }
+    check(all, "decode-ahead: every picture from its own unit, with skips");
+    check(track != nullptr && track->units_decoded() <= 301u && track->units_decoded() >= 300u, "decode-ahead: each unit decoded once");
+    check(track != nullptr && track->ahead_used() > 200u, "decode-ahead: most pictures were decoded ahead");
+    check(tasks > 200u, "decode-ahead: tasks ran on the executor");
+    for (int i = 0; i < 20; ++i) { // dropped right after a task started: the destructor waits for it
+        auto t = media::MovieTrack::open(kTmp.string(), "ra.h264", "ra.idx", "-");
+        check(t != nullptr && t->picture(0) != nullptr, "decode-ahead: first picture");
+    }
+    media::set_background_executor(nullptr);
+    media::set_video_decoder_factory(nullptr);
+}
+
 // Write generations of movie pictures (sceMpegAvcCsc -> 3DS renderer).
 void test_picture_writes() {
     media::forget_picture_writes();
@@ -310,6 +341,10 @@ void test_picture_writes() {
     check(media::picture_write_generation(0x08F58010u, 512u, g) && g == a1, "first buffer unchanged by the second");
     media::note_picture_write(0x08F58010u, 512u);
     check(media::picture_write_generation(0x08F58010u, 512u, a2) && a2 > b1, "rewrite: generation grows");
+    std::uint32_t rows = 99u;
+    check(media::picture_write_generation(0x08F58010u, 512u, g, &rows) && rows == 0u, "rows not given: 0 (unknown)");
+    media::note_picture_write(0x08F58010u, 512u, 272u);
+    check(media::picture_write_generation(0x08F58010u, 512u, g, &rows) && rows == 272u, "rows of the last write");
     for (std::uint32_t k = 0; k < 4; ++k) media::note_picture_write(0x09000000u + k * 0x100000u, 512u);
     check(!media::picture_write_generation(0x08ED0010u, 512u, g), "four newer addresses evict the oldest");
     media::forget_picture_writes();
@@ -330,6 +365,7 @@ int main() {
     test_index_and_atrac();
     test_movies();
     test_movie_read_ahead();
+    test_movie_decode_ahead();
     test_picture_writes();
     std::cout << "fork media failures=" << failures << "\n";
     return failures ? 1 : 0;

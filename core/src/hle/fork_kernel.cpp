@@ -6,6 +6,7 @@
 
 #include "p3p3ds/hle/mpeg.hpp"
 #include "p3p3ds/kernel_state.hpp"
+#include "p3p3ds/profile.hpp"
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/elf32.hpp"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -308,8 +310,109 @@ bool dispatch_vblank_subinterrupts(psprecomp::Runtime &rt, psprecomp::AllegrexCo
     return true;
 }
 
+GeStallTiming &ge_stall_timing() noexcept {
+    static GeStallTiming timing;
+    return timing;
+}
+
+namespace {
+struct GeStallBatch {
+    unsigned max{};       // 0: off
+    bool pending{};
+    int id{};
+    std::uint32_t stall{};
+    unsigned count{};
+};
+GeStallBatch g_ge_batch;
+
+// upstream's update_stall, timed into ge_stall_timing().units
+std::int32_t run_stall_update(psprecomp::Runtime &rt, int id, std::uint32_t stall) {
+    auto &t = ge_stall_timing();
+    ++t.flushes;
+    if (!t.detail) return g_fork_kernel->ge().update_stall(rt, id, stall);
+    auto &p = host_profile();
+    const std::uint64_t start = profile_now(p);
+    const std::int32_t result = g_fork_kernel->ge().update_stall(rt, id, stall);
+    t.units += profile_now(p) - start;
+    return result;
+}
+
+// Before every HLE import except sceGeListUpdateStallAddr itself: the import sees the GE as if
+// every recorded update had run (GE waits, GE queries, display, thread switches, I/O).
+void ge_stall_pre_import(psprecomp::Runtime &rt, psprecomp::AllegrexContext &, std::string_view library, std::uint32_t nid) {
+    // Display lists on the GE worker (GeManager::set_async_executor): what the worker left for the game's
+    // thread (list completion and its finish callback, SIGNAL, errors) runs before the next import.
+    if (g_fork_kernel != nullptr && g_fork_kernel->ge().async_pending()) g_fork_kernel->ge().service(rt);
+    if (!g_ge_batch.pending || (nid == 0xE0D68148u && library == "sceGe_user")) return;
+    ++ge_stall_timing().by_import;
+    flush_ge_stall(rt);
+}
+} // namespace
+
+void set_ge_stall_batching(unsigned max_updates) noexcept { g_ge_batch.max = max_updates; }
+
+void flush_ge_stall(psprecomp::Runtime &rt) {
+    auto &b = g_ge_batch;
+    if (!b.pending) return;
+    b.pending = false; // first: guest code run from the GE (finish callbacks) may call imports
+    b.count = 0;
+    (void)run_stall_update(rt, b.id, b.stall);
+}
+
+std::string ge_stall_top_opcodes(std::size_t count) {
+    const auto &t = ge_stall_timing();
+    std::array<std::uint32_t, 256> order{};
+    for (std::uint32_t i = 0; i < 256u; ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b) { return t.opcodes[a] > t.opcodes[b]; });
+    std::string text;
+    for (std::size_t k = 0; k < count && t.calls != 0u && t.opcodes[order[k]] != 0u; ++k) {
+        char item[24];
+        std::snprintf(item, sizeof item, "%s%02X:%.1f", text.empty() ? "" : " ", static_cast<unsigned>(order[k]),
+                      static_cast<double>(t.opcodes[order[k]]) / static_cast<double>(t.calls));
+        text += item;
+    }
+    return text;
+}
+
 void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kernel) {
     g_fork_kernel = &kernel;
+    g_ge_batch.pending = false; // a new runtime: nothing recorded (the cap set by the platform stays)
+    g_ge_batch.count = 0;
+    // sceGe_user::0xE0D68148 sceGeListUpdateStallAddr: upstream's GeManager::update_stall, timed
+    // (ge_stall_timing), and batched when set_ge_stall_batching is on. Replaces
+    // core/src/hle/ge.cpp's registration (fork imports register last).
+    runtime.register_hle("sceGe_user", 0xE0D68148u, [&kernel](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+        auto &t = ge_stall_timing();
+        auto &b = g_ge_batch;
+        const int id = static_cast<int>(ctx.gpr[4]);
+        const std::uint32_t stall = ctx.gpr[5];
+        // With display lists on the GE worker the list table belongs to the worker: no census, no batching.
+        const auto *list = kernel.ge().async_execution() ? nullptr : kernel.ge().find(id);
+        ++t.calls;
+        if (t.detail && list != nullptr) { // released words, before running them (from the pending stall when one is recorded)
+            auto &m = rt.memory();
+            const std::uint32_t to = stall & 0x0FFFFFFCu;
+            const std::uint32_t from = b.pending && b.id == id && (b.stall & 0x0FFFFFFCu) > list->pc ? b.stall & 0x0FFFFFFCu : list->pc;
+            for (std::uint32_t pc = from, n = 0; pc < to && n < 4096u && m.contains(pc, 4u); pc += 4u, ++n) {
+                ++t.opcodes[m.aot_load32(pc) >> 24];
+                ++t.scanned;
+            }
+        }
+        const bool deferrable = b.max != 0u && list != nullptr && list->status != GeStatus::Completed && (stall & 3u) == 0u;
+        if (!deferrable) { // as upstream: run now (after anything pending, in order)
+            flush_ge_stall(rt);
+            ++t.direct;
+            ctx.set_gpr(2, static_cast<std::uint32_t>(run_stall_update(rt, id, stall)));
+            return;
+        }
+        if (b.pending && b.id != id) { ++t.by_list; flush_ge_stall(rt); }
+        b.pending = true;
+        b.id = id;
+        b.stall = stall;
+        ctx.set_gpr(2, 0u); // what update_stall returns for a known, running list and an aligned address
+        if (++b.count >= b.max) { ++t.by_cap; flush_ge_stall(rt); }
+    });
+    psprecomp::set_runtime_pre_import_hook(&ge_stall_pre_import);
     g_vblank_subintr = VblankSubInterrupts{};
     g_module_stop_threads.clear();
     g_msgdialog = MsgDialogState{};
@@ -456,7 +559,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
                 std::memcpy(m.raw_pointer(row_address(row), w * 4u), picture + (y + row) * pw + x, w * 4u);
                 m.notify_vram_write(row_address(row), w * 4u);
             }
-            hle::media::note_picture_write(dest, stride); // after the rows: the renderer may read them at once
+            hle::media::note_picture_write(dest, stride, y + h); // after the rows: the renderer may read them at once
             hle::media::fork_movies().add_copy_time(static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - copy_start).count()));
             ctx.set_gpr(2, 0u);
@@ -472,7 +575,7 @@ void register_fork_kernel_imports(psprecomp::Runtime &runtime, KernelState &kern
             }
             m.notify_vram_write(row_address(row), w * 4u);
         }
-        hle::media::note_picture_write(dest, stride);
+        hle::media::note_picture_write(dest, stride, y + h);
         ctx.set_gpr(2, 0u);
     });
 

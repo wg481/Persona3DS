@@ -22,6 +22,7 @@ std::uint64_t g_runtime_thread_switch_generation_fast = 0u;
 
 namespace {
 RuntimePostImportHook g_post_import_hook = nullptr;
+RuntimePreImportHook g_pre_import_hook = nullptr; // P3P3DS
 std::uint64_t g_runtime_import_entry_generation = 0u; // P3P3DS
 std::int32_t g_runtime_thread_uid = -1;
 std::array<char, 64> g_runtime_thread_name{};
@@ -115,6 +116,7 @@ void set_runtime_fallback_hook(RuntimeFallbackHook hook) noexcept {
 }
 
 void set_runtime_post_import_hook(RuntimePostImportHook hook) noexcept { g_post_import_hook = hook; }
+void set_runtime_pre_import_hook(RuntimePreImportHook hook) noexcept { g_pre_import_hook = hook; } // P3P3DS
 std::uint64_t runtime_import_entry_generation() noexcept { return g_runtime_import_entry_generation; }
 // P3P3DS: see RuntimeProfile in runtime.hpp.
 RuntimeProfile &runtime_profile() noexcept { static RuntimeProfile profile; return profile; }
@@ -1272,6 +1274,7 @@ void Runtime::invoke_import_cached(std::uint32_t slot, std::string_view library,
     }
 
     const HleTimer hle_timer(library, nid); // P3P3DS profiling
+    if (g_pre_import_hook != nullptr) g_pre_import_hook(*this, ctx, library, nid); // P3P3DS
     const std::uint64_t outer_entry = g_runtime_import_entry_generation; // P3P3DS: nested imports
     g_runtime_import_entry_generation = g_runtime_thread_switch_generation_fast;
     (*bound)(*this, ctx);
@@ -1295,6 +1298,7 @@ void Runtime::invoke_import(std::string_view library, std::uint32_t nid, Allegre
         return;
     }
     const HleTimer hle_timer(library, nid); // P3P3DS profiling
+    if (g_pre_import_hook != nullptr) g_pre_import_hook(*this, ctx, library, nid); // P3P3DS
     const std::uint64_t outer_entry = g_runtime_import_entry_generation; // P3P3DS: nested imports
     g_runtime_import_entry_generation = g_runtime_thread_switch_generation_fast;
     function_it->second(*this, ctx);

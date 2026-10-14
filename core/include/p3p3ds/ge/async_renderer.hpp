@@ -14,6 +14,7 @@
 // to the inner renderer, as before.
 #include "p3p3ds/ge/renderer.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,10 @@ public:
 
     // Runs fn on the worker after everything queued so far (directly without a worker).
     void post(std::function<void(GeRenderer &)> fn);
+    // P3P3DS: the same without a heap allocation, for work queued per draw (GeManager runs display
+    // lists on the worker this way): fn(ctx, kind, a, b, p) on the worker, in queue order.
+    using TaskFn = void (*)(void *ctx, std::uint32_t kind, std::uint32_t a, std::uint32_t b, void *p);
+    void post_task(TaskFn fn, void *ctx, std::uint32_t kind, std::uint32_t a, std::uint32_t b, void *p);
     // Runs fn on this thread once the worker is idle.
     template <class F>
     decltype(auto) call_idle(F &&fn) {
@@ -71,7 +76,7 @@ public:
     [[nodiscard]] std::uint64_t records() const noexcept { return stats_.records; }
 
 private:
-    enum class Type : std::uint32_t { Wrap = 1, State, Clut, Draw, Transfer, Sync, Call, Stop };
+    enum class Type : std::uint32_t { Wrap = 1, State, Clut, Draw, Transfer, Sync, Call, Stop, Task /* P3P3DS */ };
     struct Header {
         Type type;
         std::uint32_t bytes; // whole record, multiple of 8
@@ -99,6 +104,11 @@ private:
     // What the worker's register copy holds (game's thread).
     bool state_sent_{}, clut_sent_{};
     std::uint64_t sent_version_{}, sent_clut_hash_{};
+    // P3P3DS: State records carry only the words that changed (kStateWords: reg, bone, world, view,
+    // tgen, proj as 32-bit words). sent_state_ is what the worker holds; delta_ builds a record.
+    static constexpr std::uint32_t kStateWords = 256u + 96u + 12u * 3u + 16u;
+    std::array<std::uint32_t, kStateWords> sent_state_{};
+    std::array<std::uint32_t, 4u + 2u * kStateWords> delta_{};
     GeRegisters worker_regs_; // the worker's copy, rebuilt from State / Clut records
     AsyncStats stats_;
 };

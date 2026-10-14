@@ -3,6 +3,7 @@
 // Kept in their own files (plus one registration call in hle_modules.cpp) so
 // that upstream P3P3DS changes keep merging; drop an entry here if upstream
 // implements the same NID.
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -290,6 +291,41 @@ inline constexpr std::uint64_t kUmdMinWaitUs = 250u;
 // 730-740 us), then 0 until the next start; the frame is 16,680-16,690 us.
 // Upstream's virtual clock starts each vblank at a multiple of
 // ThreadManager::kVblankPeriodUs, so: (now % period) < kVblankLengthUs.
+// Persona3DS profiling: time spent inside sceGeListUpdateStallAddr's GE work
+// (GeManager::update_stall: running the newly appended display-list commands),
+// in host_profile().clock units, without the HLE call's own entry/exit cost.
+// The first dungeon calls it about 10,500 times a second.
+struct GeStallTiming {
+    std::uint64_t calls{}, units{};
+    // Opcodes of the commands each call releases, read from the list's current
+    // pc up to the new stall address (the list's own words; sub-lists reached
+    // through CALL are not followed, the CALLs themselves are counted).
+    std::array<std::uint64_t, 256> opcodes{};
+    std::uint64_t scanned{};
+    // Batching (set_ge_stall_batching): update_stall runs ("flushes"), and why: the
+    // batch reached its cap, another import was called, another list was updated,
+    // or the update could not be deferred (unknown/completed list, unaligned).
+    std::uint64_t flushes{}, by_cap{}, by_import{}, by_list{}, direct{};
+    // Timing (units) and the opcode census (opcodes, scanned) only when set: each costs timer reads
+    // (kernel calls on the New 3DS) or a scan per update. Calls and flushes are always counted.
+    bool detail{};
+};
+
+// Persona3DS: sceGeListUpdateStallAddr batching. With max_updates > 0, a valid
+// stall update only records the new stall address; the GE runs the released
+// commands (GeManager::update_stall) once max_updates updates are pending, before
+// any other HLE import (pre-import hook), or when another list is updated. Every
+// import therefore sees the GE as if each update had run at once; only updates
+// with nothing but game code between them are run together. 0 (the default)
+// runs every update at once, as upstream. The New 3DS runner turns it on.
+void set_ge_stall_batching(unsigned max_updates) noexcept;
+// Runs the pending stall update, if any (also used by tests).
+void flush_ge_stall(psprecomp::Runtime &rt);
+// The `count` opcodes most often released per call so far, as "op:per-call"
+// pairs, e.g. "C4:1.0 04:1.0 0A:0.9".
+[[nodiscard]] std::string ge_stall_top_opcodes(std::size_t count);
+[[nodiscard]] GeStallTiming &ge_stall_timing() noexcept;
+
 inline constexpr std::uint64_t kVblankLengthUs = 732u;
 [[nodiscard]] constexpr std::uint32_t display_is_vblank(std::uint64_t now_us, std::uint64_t period_us) noexcept {
     return now_us % period_us < kVblankLengthUs ? 1u : 0u;

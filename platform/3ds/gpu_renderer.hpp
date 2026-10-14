@@ -91,6 +91,10 @@ public:
     // Diagnostic trace (sdmc:/p3p3ds/gpu_trace.txt present): one line per present
     // and per non-model draw until `presents` presents were written.
     void set_trace(std::FILE *file, std::uint32_t presents) { trace_ = file; trace_left_ = presents; }
+    // P3P3DS: textures unchanged for 8+ checks are hashed every 2nd, after 16 every 4th, after 32 every
+    // 8th frame (title screen: hashing was 45 % of core 2; docs/CURRENT_STATE.md 2026-10-14). False:
+    // every texture every frame, as before.
+    void set_texture_backoff(bool on) { texture_backoff_ = on; }
 
 private:
     // Screen vertex (CPU-transformed): v0 (x*w, y*w, z*w, w), v2 texels, v3 colour.
@@ -121,6 +125,9 @@ private:
         std::uint64_t hash{};
         std::uint32_t width{}, height{}, bytes{};
         std::uint64_t last_frame{}, checked_frame{};
+        std::uint64_t next_check{}; // P3P3DS: first frame its contents are hashed again (unchanged for a while)
+        std::uint32_t stable{};     // P3P3DS: checks in a row that found it unchanged
+        bool movie{};               // P3P3DS: checked by write generation, every frame
     };
 
     void begin_frame();
@@ -236,6 +243,7 @@ private:
     std::FILE *draw_trace_{};      // P3P3DS: draw trace (start_trace); upstream's gpu_trace uses trace_
     unsigned draw_trace_left_{};
     std::uint32_t texture_bytes_{};
+    bool texture_backoff_{true}; // P3P3DS: set_texture_backoff
     std::uint8_t *arena_{};       // linear memory for vertices and indices of the open GPU frame
     std::uint32_t arena_used_{};
     std::vector<ge::ModelVertex> model_;
