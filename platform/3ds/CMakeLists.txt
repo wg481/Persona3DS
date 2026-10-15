@@ -157,4 +157,18 @@ if(P3P_HAVE_GAME)
         DESCRIPTION "${P3P_PROFILE_SMDH_DESCRIPTION}"
         AUTHOR "${P3P_PROFILE_SMDH_AUTHOR}")
     ctr_create_3dsx(p3p3ds SMDH "${CMAKE_BINARY_DIR}/p3p3ds.smdh" ROMFS "${ROMFS_DIR}")
+
+    # P3P3DS: optional installable .cia, `make -C build/3ds cia` (not part of `all`): bannertool, makerom,
+    # banner.png, audio.wav and icon.png (optional) come from P3P_BANNER_DIR, a folder each user fills
+    # (not in git). platform/3ds/cia/make_cia.cmake checks them and says what is missing.
+    set(P3P_BANNER_DIR "${P3P_ROOT}/banner" CACHE PATH "bannertool, makerom, banner.png, audio.wav, icon.png for the cia target")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cia/p3p3ds.rsf.in" "${CMAKE_BINARY_DIR}/cia/p3p3ds.rsf" @ONLY)
+    add_custom_target(cia
+        COMMAND "${CMAKE_COMMAND}" "-DBUILD_DIR=${CMAKE_BINARY_DIR}" "-DBANNER_DIR=${P3P_BANNER_DIR}"
+                "-DELF_NAME=$<TARGET_FILE_NAME:p3p3ds>" "-DSMDH_NAME=p3p3ds.smdh"
+                "-DNAME=${P3P_PROFILE_SMDH_NAME}" "-DDESCRIPTION=${P3P_PROFILE_SMDH_DESCRIPTION}"
+                "-DAUTHOR=${P3P_PROFILE_SMDH_AUTHOR}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cia/make_cia.cmake"
+        DEPENDS p3p3ds
+        COMMENT "Building p3p3ds.cia"
+        VERBATIM)
 endif()

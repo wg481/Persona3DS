@@ -16,6 +16,7 @@
 #include <memory>
 #include <iostream>
 #include <string>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -791,6 +792,7 @@ void test_ge_state_version_on_change() {
 // CALL/RET, JUMP, SIGNAL+END, FINISH+END (completion on the game's thread), a second list, sceGeGetCmd
 // and sceGeDrawSync; the game's thread may queue work while the worker runs.
 void test_ge_async_execution() {
+    static bool slow_draws = false; // P3P3DS: a worker slower than the game, so stall updates merge
     struct Recorder final : p3p3ds::ge::GeRenderer {
         std::vector<std::uint64_t> log;
         p3p3ds::ge::DrawStats s;
@@ -810,6 +812,7 @@ void test_ge_async_execution() {
             log.push_back(h);
         }
         void draw(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r, p3p3ds::ge::Prim p, std::uint32_t c, std::uint32_t v, std::uint32_t i) override {
+            if (slow_draws) std::this_thread::sleep_for(std::chrono::microseconds(30));
             note(r, (static_cast<std::uint64_t>(p) << 56) ^ (static_cast<std::uint64_t>(c) << 32) ^ v ^ (static_cast<std::uint64_t>(i) << 8));
         }
         void transfer(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r) override { note(r, 0x7777u); }
@@ -921,6 +924,15 @@ void test_ge_async_execution() {
     CHECK(census_worker.log == direct.log);
     CHECK(on_worker.cmds == direct.cmds && census_worker.cmds == direct.cmds);
     CHECK(on_worker.sync == direct.sync && direct.sync == 0u);
+    // P3P3DS: stall updates that replace a pending one (stall_slot_) give the same draws.
+    p3p3ds::hle::ge_stall_timing().merged = 0;
+    slow_draws = true;
+    const Result slow_worker = run(2, false);
+    slow_draws = false;
+    CHECK(!slow_worker.stopped);
+    CHECK(slow_worker.log == direct.log);
+    CHECK(slow_worker.cmds == direct.cmds && slow_worker.sync == 0u);
+    CHECK(p3p3ds::hle::ge_stall_timing().merged > 0u);
 }
 
 // sceMpegAvcCsc as Persona calls it (run 17, displayThread): range {0, 0,

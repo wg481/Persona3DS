@@ -1,4 +1,5 @@
 #include "p3p3ds/hle/ge.hpp"
+#include "p3p3ds/hle/fork_kernel.hpp" // P3P3DS: ge_stall_timing (merged updates)
 #include "p3p3ds/ge/async_renderer.hpp" // P3P3DS: display lists on the GE worker
 #include "p3p3ds/ge/geometry.hpp"
 #include "p3p3ds/profile.hpp"
@@ -76,6 +77,20 @@ std::int32_t GeManager::update_stall(psprecomp::Runtime &rt, int id, std::uint32
     if(async_) { // P3P3DS: the worker applies it; [INFERRED] a completed list's update returns 0, not `already`
         if(id<=0 || id>=next_id_) return invalid_id;
         if(stall&3) return invalid_pointer;
+        // P3P3DS: Persona updates the stall address after about every draw (25-32k/s in the dungeon, each a
+        // task for the worker: about 2.7 us on the game's thread). While the worker has not taken this list's
+        // previous update, the newer address replaces it; another list's pending update keeps its own task.
+        const std::uint64_t want=(static_cast<std::uint64_t>(static_cast<std::uint32_t>(id))<<32)|(stall&0x0FFFFFFF);
+        std::uint64_t cur=stall_slot_.load(std::memory_order_acquire);
+        while(true) {
+            if(cur==0u) {
+                if(!stall_slot_.compare_exchange_weak(cur,want,std::memory_order_acq_rel,std::memory_order_acquire)) continue;
+                async_->post_task(&GeManager::worker_task,this,4u,0u,0u,nullptr);
+                return 0;
+            }
+            if(static_cast<std::uint32_t>(cur>>32)!=static_cast<std::uint32_t>(id)) break;
+            if(stall_slot_.compare_exchange_weak(cur,want,std::memory_order_acq_rel,std::memory_order_acquire)) { ++ge_stall_timing().merged; return 0; }
+        }
         async_->post_task(&GeManager::worker_task,this,2u,static_cast<std::uint32_t>(id),stall&0x0FFFFFFF,nullptr);
         return 0;
     }
@@ -426,7 +441,8 @@ bool GeManager::worker_needs_main(const GeListInfo &l, std::uint32_t word) const
     }
 }
 // On the worker. kind 1: enqueue (p: the new GeListInfo, a: head), 2: stall update (a: id, b: stall),
-// 3: continue after the game's thread ran what the worker left.
+// 3: continue after the game's thread ran what the worker left, 4: the stall update in stall_slot_ (P3P3DS).
+// Each kind-4 task follows the slot going from empty to full, and empties it: it applies the newest address.
 void GeManager::worker_task(void *self, std::uint32_t kind, std::uint32_t a, std::uint32_t b, void *p) {
     auto &g=*static_cast<GeManager *>(self);
     auto &rt=*g.async_rt_;
@@ -435,7 +451,12 @@ void GeManager::worker_task(void *self, std::uint32_t kind, std::uint32_t a, std
         while (g.lists_.size() >= kKeptLists && g.lists_.begin()->second.status==GeStatus::Completed) g.lists_.erase(g.lists_.begin());
         const int id=static_cast<int>(list->id);
         g.lists_.emplace(id,*list); a ? g.queue_.push_front(id) : g.queue_.push_back(id);
-    } else if(kind==2u) {
+    } else if(kind==2u || kind==4u) {
+        if(kind==4u) {
+            const std::uint64_t v=g.stall_slot_.exchange(0u,std::memory_order_acq_rel);
+            a=static_cast<std::uint32_t>(v>>32);
+            b=static_cast<std::uint32_t>(v);
+        }
         auto i=g.lists_.find(static_cast<int>(a));
         if(i==g.lists_.end() || i->second.status==GeStatus::Completed) return;
         i->second.stall_address=b;
