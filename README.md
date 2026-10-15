@@ -77,6 +77,14 @@ cmake -S platform/3ds -B build/3ds -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=$D
 make -C build/3ds
 ```
 
+Optional installable `.cia` (`build/3ds/p3p3ds.cia`, installed with FBI or a similar title manager; it runs like the `.3dsx` and uses the same SD card files): make a folder `banner/` at the repository root (not tracked by git) with `bannertool` and `makerom` (or `bannertool.exe`, `makerom.exe`), `banner.png` (256x128), `audio.wav` (the banner's sound) and optionally `icon.png` (48x48; without it the `.3dsx` metadata is used), then:
+
+```bash
+make -C build/3ds cia
+```
+
+The title, product code and unique id are in `profiles/p1p/config/profile.cmake`; the process settings (124 MB New 3DS memory mode, 804 MHz, L2 cache, core 2) in `platform/3ds/cia/p3p3ds.rsf.in`. `-DP3P_BANNER_DIR=<folder>` uses another folder.
+
 On the SD card:
 
 | Path | What |
