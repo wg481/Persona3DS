@@ -254,7 +254,13 @@ void AsyncRenderer::push(Type type, const void *payload, std::uint32_t payload_b
 // changed (state_version; CLUT loads change it too), the CLUT only when its
 // hash changed.
 void AsyncRenderer::push_state(const GeRegisters &regs) {
-    if (state_sent_ && regs.state_version == sent_version_) return;
+    // P3P3DS: GeManager leaves state_version when a word is rewritten with its value or is list control
+    // (docs/CURRENT_STATE.md); such words still reach the worker's copy while any is marked.
+    if (state_sent_ && regs.state_version == sent_version_) {
+        std::uint32_t any = 0u;
+        if (regs.dirty_tracked) for (const std::uint32_t d : regs.dirty) any |= d;
+        if (any == 0u) return;
+    }
     // P3P3DS: only the words that differ from the worker's copy (sent_state_, all zero like
     // worker_regs_ at the start), behind a StateDelta header in delta_.
     static_assert(kStateWords == kStateEnd && sizeof(StateDelta) == 16u);

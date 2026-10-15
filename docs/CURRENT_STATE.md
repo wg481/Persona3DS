@@ -2,6 +2,19 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Core 2: redundant GE writes no longer leave the batch fast path (2026-10-14)
+
+- [VERIFIED] Prep split on the maintainer's New 3DS, `34d6ec67`, school dungeon (last 10 s, % of core 2's time): `draw: prep 23.7` = `target 1.2 tex 4.3 sig 8.4 flush 3.8 state 0.7`; `gpu thd: busy 65`. Report `merge 777k>292k f0k`: 62 % of the model draws joined the pending batch (their signature equalled it), yet none took the fast path, so every one of them still paid the texture lookup and the about 160-word signature build and compare.
+- [INFERRED] why: the fast path needs `GeRegisters::state_version` unchanged since the previous model draw, and `GeManager::execute` moved it on every non-control command, also when the game rewrote a register, matrix or palette with the value it already held. Joined draws with equal signatures imply such rewrites.
+- Change (`core/src/hle/ge.cpp`, `core/src/ge/async_renderer.cpp`): a register write moves `state_version` only when the value differs; matrix data (BONE/WORLD/VIEW/TGEN/PROJ data) only when the element differs, and no longer stores the data word in the register copy (nothing reads it); LOADCLUT only when the palette bytes or the command differ; TEXFLUSH, TEXSYNC and TRXKICK always. `AsyncRenderer::push_state` (the queued renderer, `ge_sync.txt`) also sends marked words when the version stayed, so its worker copy still equals the game's. Test `test_ge_state_version_on_change`; `test_ge_marked_state_through_queue` and `test_ge_async_execution` (copies equal across direct/queued/worker) pass, also under TSAN.
+- [UNVERIFIED] expected on hardware: report `f` near the joined count (up to about 485k of 777k) and `prep` (`tex`, `sig`) down by up to about 60 %, about 8 points of core 2's time.
+
+## Core 2 per-draw prep split (measurement) (2026-10-14)
+
+- Why: with `-O2` the dungeon's remaining dips are seconds where core 2 is 80-84 % busy; `draw: prep` (target, texture, fragment state and batch handling before each model draw's vertices) is its largest step, 17-30 % of the time (report on `40426994` with `-O2`: `prep 20.6 vtx 4.7 unif 4.9 sub 2.7`, `gpu thd: busy 70 wait 14.0`).
+- Change (`platform/3ds/gpu_renderer.*`, `main.cpp`; measurement only): model-draw prep is timed in five sampled parts like `prep_ticks`: target/frame (`begin_frame`, target lookup and bind), texture lookup (`bind_texture`), batch signature (build and compare, index room), the previous batch's submit (`flush_batch`) and fragment state (texture parameters, `apply_fragment_state`, texture bind, scissor). Report line ` prep: target T tex X sig S flush F state E` under `draw:`.
+- [UNVERIFIED] which part dominates; the next change targets it.
+
 ## Game code at -O2: about 20 % less main-core time per draw in the dungeon (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on master `40426994` built with `-DP3P_AOT_OPT=-O2` (no code change): `.3dsx` 29,793,508 bytes, boots and plays (opening movie, title, save, school dungeon); report `heap: 73028 KiB in use: 53263 KiB` (77,216 KiB heap with the `-Os` flags: the code is about 4.2 MiB larger), `failed alloc: none`.

@@ -45,6 +45,9 @@ struct GpuStats {
     // vertex unpack or CPU transform (vertex), shader uniforms (uniform),
     // citro3d state emission and the draw command (submit).
     std::uint64_t prep_ticks{}, vertex_ticks{}, uniform_ticks{}, submit_ticks{};
+    // P3P3DS: prep of model draws split: target/frame, texture lookup, batch signature, submitting the
+    // previous batch, fragment state (docs/CURRENT_STATE.md 2026-10-14). Sampled like prep_ticks.
+    std::uint64_t prep_target_ticks{}, prep_tex_ticks{}, prep_sig_ticks{}, prep_flush_ticks{}, prep_state_ticks{};
     // Part of vertex_ticks for model draws: getting the shader vertices into
     // the arena (vertex cache lookup and copy, or unpacking).
     std::uint64_t fill_ticks{};

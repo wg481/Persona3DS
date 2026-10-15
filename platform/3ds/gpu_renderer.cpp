@@ -814,7 +814,9 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     const bool textured = ge::draw_is_textured(regs, layout);
 
     float su = 1.0f, sv = 1.0f;
+    const u64 tex_start = tick(); // P3P3DS: prep split
     C3D_Tex *tex = textured ? const_cast<C3D_Tex *>(bind_texture(memory, regs, su, sv)) : nullptr;
+    const u64 tex_end = tick();
     const bool sprites = prim == ge::Prim::Sprites;
     if (trace_ && (layout.through || clear_mode || sprites)) {
         const auto ti = ge::texture_info(regs);
@@ -860,6 +862,9 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
     const bool model = !layout.through && !clear_mode && !sprites && !cpu_vertices_ &&
                        (prim == ge::Prim::Triangles || prim == ge::Prim::TriangleStrip || prim == ge::Prim::TriangleFan);
     if (model) {
+        add(gpu_stats_.prep_target_ticks, prep_start, tex_start); // P3P3DS: prep split (model draws)
+        add(gpu_stats_.prep_tex_ticks, tex_start, tex_end);
+        const u64 sig_start = tick();
         sig_.clear();
         sig_.push_back(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(target)));
         sig_.push_back(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(tex)));
@@ -887,8 +892,13 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
             flush_frame();
         }
         const bool join = batch_active_ && sig_ == batch_sig_;
+        const u64 flush_start = tick();
+        add(gpu_stats_.prep_sig_ticks, sig_start, flush_start);
+        u64 state_start = flush_start;
         if (!join) {
             flush_batch();
+            state_start = tick();
+            add(gpu_stats_.prep_flush_ticks, flush_start, state_start);
             if (tex != nullptr) set_texture_params(tex, regs);
             if (!state_valid_ || key != frag_key_) {
                 apply_fragment_state(regs, tex != nullptr, clear_mode, sprites);
@@ -904,6 +914,7 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
         }
         const u64 vertex_start = tick();
         add(gpu_stats_.prep_ticks, prep_start, vertex_start);
+        if (!join) add(gpu_stats_.prep_state_ticks, state_start, vertex_start); // P3P3DS: prep split
         draw_model(memory, regs, layout, prim, count, vertex_address, index_address, !join, tex != nullptr, su, sv);
         fast_valid_ = true;
         fast_version_ = regs.state_version;

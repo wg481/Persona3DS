@@ -732,6 +732,57 @@ void test_ge_marked_state_through_queue() {
     CHECK(queued == direct);
 }
 
+// P3P3DS: state_version (the 3DS renderer's fast path) moves only when the render state changes:
+// registers, matrices and palettes rewritten with the values they hold leave it; a changed value,
+// a new palette and TEXFLUSH/TRXKICK move it; the matrices still reach the renderer.
+void test_ge_state_version_on_change() {
+    struct Versions final : p3p3ds::ge::GeRenderer {
+        std::vector<std::uint64_t> v;
+        std::vector<float> world0;
+        p3p3ds::ge::DrawStats s;
+        void draw(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &r, p3p3ds::ge::Prim, std::uint32_t, std::uint32_t, std::uint32_t) override {
+            v.push_back(r.state_version);
+            world0.push_back(r.world[0]);
+        }
+        void transfer(psprecomp::GuestMemory &, const p3p3ds::ge::GeRegisters &) override {}
+        const p3p3ds::ge::DrawStats &stats() const override { return s; }
+    };
+    psprecomp::Runtime rt;
+    p3p3ds::KernelState kernel;
+    p3p3ds::hle::register_all_hle_modules(rt, kernel);
+    auto rec = std::make_unique<Versions>();
+    Versions *seen = rec.get();
+    kernel.ge().set_renderer(std::move(rec));
+    auto &m = rt.memory();
+    constexpr std::uint32_t kList = 0x08A40000u, kVerts = 0x08B00000u, kPal = 0x08B80000u, kPal2 = 0x08B81000u;
+    for (std::uint32_t k = 0; k < 16u; ++k) { m.store32(kPal + 4u * k, 0x1000u + k); m.store32(kPal2 + 4u * k, 0x2000u + k); }
+    std::uint32_t pc = kList;
+    const auto put = [&](std::uint32_t w) { m.store32(pc, w); pc += 4u; };
+    const auto draw = [&] { put(0x10000000u | ((kVerts >> 8) & 0x0F0000u)); put(0x01000000u | (kVerts & 0xFFFFFFu)); put(0x04030003u); };
+    const auto world = [&](std::uint32_t first) { put(0x3A000000u); put(0x3B000000u | first); for (int i = 1; i < 12; ++i) put(0x3B000000u | 0x3F8000u); };
+    const auto palette = [&](std::uint32_t a) { put(0xB0000000u | (a & 0xFFFFF0u)); put(0xB1000000u | ((a >> 8) & 0x0F0000u)); put(0xC4000002u); };
+    put(0x12000000u | 0x11Cu); put(0x21000001u); world(0x3F8000u); palette(kPal);
+    draw();                                                       // 0
+    put(0x12000000u | 0x11Cu); put(0x21000001u); world(0x3F8000u); palette(kPal);
+    draw();                                                       // 1: same values
+    put(0x21000000u); draw();                                     // 2: register changed
+    world(0x400000u); draw();                                     // 3: matrix changed
+    palette(kPal2); draw();                                       // 4: palette changed
+    put(0xCB000000u); draw();                                     // 5: TEXFLUSH
+    put(0x0F000000u); put(0x0C000000u);
+    rt.cpu().set_gpr(4, kList); rt.cpu().set_gpr(5, pc); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
+    rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
+    rt.cpu().set_gpr(4, 0u);
+    rt.invoke_import("sceGe_user", 0xB287BD61u, rt.cpu()); // sceGeDrawSync
+    CHECK(!rt.stopped());
+    CHECK(seen->v.size() == 6u);
+    if (seen->v.size() == 6u) {
+        CHECK(seen->v[1] == seen->v[0]);
+        for (int i = 2; i < 6; ++i) CHECK(seen->v[i] != seen->v[i - 1]);
+        CHECK(seen->world0[2] == 1.0f && seen->world0[3] == 2.0f);
+    }
+}
+
 // P3P3DS: display lists executed on the GE worker (GeManager::set_async_executor) reach the renderer
 // with the same calls, registers and matrices as on the game's thread, through enqueue, stall updates,
 // CALL/RET, JUMP, SIGNAL+END, FINISH+END (completion on the game's thread), a second list, sceGeGetCmd
@@ -1350,6 +1401,7 @@ int main() {
     test_ge_stall_timing();
     test_ge_loadclut_fast_path();
     test_ge_marked_state_through_queue();
+    test_ge_state_version_on_change();
     test_ge_async_execution();
     test_ge_stall_batching();
     test_mpeg_avc_csc();
