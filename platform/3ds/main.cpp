@@ -1306,6 +1306,12 @@ int main() {
     }
     if (!rt.stopped()) rt.stop("Runtime returned");
     if (g_async != nullptr) g_async->drain(); // the exit screen runs aptMainLoop: citro3d idle
+    // P3P3DS: finish the GPU's work now, before the exit screen (where HOME and Close can take the GPU away)
+    if (g_gpu != nullptr) {
+        const auto finish = [] { return g_gpu->finish_for_exit(SYSCLOCK_ARM11 / 2u); };
+        const bool idle = g_async != nullptr ? g_async->call_idle([&finish](p3p3ds::ge::GeRenderer &) { return finish(); }) : finish();
+        exit_step(idle ? "GPU idle" : "GPU did not finish in 0.5 s: citro3d shutdown skipped");
+    }
     stats.status = "stopped";
     if (g_seconds_log) { std::fclose(g_seconds_log); g_seconds_log = nullptr; }
     stop_report_writer(); // the final report below is written here, after any pending one
@@ -1316,11 +1322,13 @@ int main() {
     // P3P3DS: closing the .cia from the HOME Menu hung on "Closing software..." (maintainer, 2026-10-14).
     // Each shutdown step is appended to sdmc:/persona3ds/exit_log.txt as it finishes, and the movie
     // decoder (mvd service) and the DSP are released here instead of by static destructors after main.
-    exit_step("start");
+    exit_step("exit screen closed");
     g_gpu = nullptr;
     g_async = nullptr;
-    kernel_owner.reset(); // the GE worker stops, then the GPU renderer (citro3d) shuts down before gfx
-    exit_step("kernel, GE worker and GPU renderer stopped");
+    if (kernel_owner) kernel_owner->ge().set_renderer(nullptr); // P3P3DS: the GE worker stops, then the GPU renderer (citro3d)
+    exit_step("GE worker and GPU renderer stopped");
+    kernel_owner.reset(); // before gfx
+    exit_step("kernel stopped");
     p3p3ds::hle::media::fork_movies().clear(); // the movie decoder: mvdstdExit
     exit_step("movie decoder released");
     p3p3ds::hle::media::set_background_executor(nullptr); // Persona3DS: core 1 worker (movies)

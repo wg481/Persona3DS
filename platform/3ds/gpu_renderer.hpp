@@ -105,6 +105,10 @@ public:
     // every texture every frame, as before.
     void set_texture_backoff(bool on) { texture_backoff_ = on; }
     void set_frame_split(bool on) { frame_split_ = on; } // P3P3DS: split_frame
+    // P3P3DS: at exit, while the app still owns the GPU: submit the open frame and wait for the GX queue
+    // (at most timeout_ticks). false: the GPU did not finish, and the destructor then skips every citro3d
+    // call that waits for it (C3D_RenderTargetDelete, C3D_Fini), which would hang the exit.
+    bool finish_for_exit(std::uint64_t timeout_ticks);
     // P3P3DS: frees every cached texture the current frame does not use (linear memory for another
     // user, e.g. the movie decoder's 3 MiB work buffer); returns the bytes freed. Call it only while
     // the renderer is idle (AsyncRenderer::call_idle).
@@ -261,6 +265,7 @@ private:
     std::uint32_t texture_bytes_{};
     bool texture_backoff_{true}; // P3P3DS: set_texture_backoff
     bool frame_split_{true};     // P3P3DS: split_frame
+    bool gpu_lost_{};            // P3P3DS: finish_for_exit timed out
     std::uint32_t splits_{}, flushed_vertex_{}, flushed_index_{}; // P3P3DS: this GPU frame's splits, cache-flushed bytes
     std::uint8_t *arena_{};       // linear memory for vertices and indices of the open GPU frame
     std::uint32_t arena_used_{};

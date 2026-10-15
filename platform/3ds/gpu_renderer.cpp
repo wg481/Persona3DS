@@ -264,7 +264,15 @@ GpuRenderer::GpuRenderer() {
     targets_.reserve(kMaxTargets);
 }
 
+bool GpuRenderer::finish_for_exit(std::uint64_t timeout_ticks) {
+    if (in_frame_) end_frame();
+    gxCmdQueue_s &queue = __C3D_Context;
+    gpu_lost_ = !gxCmdQueueWait(&queue, static_cast<s64>(timeout_ticks));
+    return !gpu_lost_;
+}
+
 GpuRenderer::~GpuRenderer() {
+    if (gpu_lost_) return; // P3P3DS: see finish_for_exit; the process exit frees the memory
     if (in_frame_) end_frame();
     for (auto &[key, t] : textures_) C3D_TexDelete(&t.tex);
     for (auto &t : deferred_free_) C3D_TexDelete(&t);

@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Opening: the first IDR slice was not decoded; exit hang inside the kernel teardown (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS, `.cia` of `a81862aa`, opening then title, START+SELECT: movie status `nal max 12936 B, incomplete 1 (first pic 0, left max 12936 B)`: exactly one unit came back INCOMPLETEPROCESSING, in the first picture, with all of it (12,936 bytes, the largest unit, i.e. the first IDR slice) left. That picture's slice was never decoded, so the P pictures after it had no reference until the next keyframe: the washed-out start. [WRONG] (entry below) that the lead was only a possibility: it is the cause, pending the fix's check.
+- Change (`platform/3ds/fork_mvd.hpp`): a unit returned INCOMPLETEPROCESSING is handed in again from where the decoder stopped (`remaining_size` bytes at the end, moved to the buffer start), at most 8 times. Status adds `resent N ok N`. [UNVERIFIED] on hardware.
+- [VERIFIED] `exit_log.txt` of that run holds only `start`: the hang is in `kernel_owner.reset()` (GE worker, GPU renderer, kernel). [INFERRED] citro3d waits there for the GPU without a timeout (`C3D_RenderTargetDelete`/`C3D_Fini` wait for the GX queue, `3ds/citro3d` `renderqueue.c`), and after HOME the app no longer owns the GPU, so work still queued (an open frame, frame-split parts) never completes.
+- Change: `GpuRenderer::finish_for_exit` submits the open frame and waits for the GX queue at most 0.5 s, right after the game stops and before the exit screen (the app still owns the GPU there); on a timeout the destructor skips the citro3d calls that wait. `main` stops the GE worker and the renderer (`set_renderer(nullptr)`) before the kernel, with `exit_log.txt` lines `GPU idle` (or the timeout), `exit screen closed`, `GE worker and GPU renderer stopped`, `kernel stopped`, then the earlier steps. [UNVERIFIED] on hardware.
+
 ## .cia runs; exit hang log; MVD input evidence (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS, `.cia` of `42623499` (kernel 2.44): boots, plays the movies (`mvd init 00000000`, 254 pictures, 0 failed), school dungeon; `cores : core2 ok ... movies on core1, GE on core2, lists on core2`; `stall: 32.3k/s ... merged 86%`. The mvd crash of the entry below is gone.
