@@ -2,6 +2,12 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Batch fast path working in the dungeon: core 2 prep 23.7 -> 14.3 % (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `1dd34465` (header now right), same school-dungeon walk: `merge 738k>285k f453k` (every one of the 453k joined draws took the fast path), `join   : slow 0 other 0`; last 10 s `draw: prep 14.3` (23.7 on `34d6ec67`) = `target 0.5 tex 3.4 sig 2.3 flush 3.9 state 0.6`; `gpu thd: busy 58 wait 7.1` (65 / 11.6); run average speed 105 % (98 %). Fast path, `join` counter and the TEXFLUSH/CLUT-address/non-render-register changes of the two entries below confirmed.
+- [VERIFIED] CSV dungeon rows 37-76: speed 87-102 %, mostly 98-101 % (72-103 % on `d6b90214`); `gpu_prep_pct` 9-22 (13-33). Remaining dips (87-92 %, rows 56, 61, 70, 71) are the heaviest views, 31-33k draws/s: core 2 76-81 % busy (about 25 us per draw, about 28 before) and the main core at `idle 0` (`aot 66-70`) with `sceGe_user_B287BD61` (sceGeDrawSync) 10-12 % of the second, so both cores are near their limit there.
+- Next candidates on core 2: `flush` (previous batch's submit, 3.9), `tex` of the draws that start a batch (3.4), vertices/uniforms/submit (`vtx 4.5 unif 4.9 sub 2.4`); on the main core, game code (`aot`).
+
 ## Fast path blocked by TEXFLUSH before every draw (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `d6b90214` (report header said `build 6661ef9f`: the id is taken at configure time and `make` did not reconfigure), school dungeon: `join   : slow 26453 other 0 CB:100%`, `merge 687k>264k f0k`, `prep: target 1.0 tex 3.8 sig 7.1 flush 3.4 state 0.5`, `gpu thd: busy 61`; CSV dungeon rows 33-70 speed 72-103 %. Every sampled join off the fast path had TEXFLUSH (`0xCB`) since the previous PRIM, and only it: the CLUT address change was not the blocker, or not alone.
