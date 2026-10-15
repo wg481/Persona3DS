@@ -196,7 +196,7 @@ struct TimeSample {
     u64 fill{};                                // model vertices into the arena (part of vertex)
     u64 gpu_busy{}, gpu_wait{};                // GE worker busy; game's thread waiting for it
     double ge_cmds{}, ge_draws{}, ge_states{}, ge_cluts{}; // Persona3DS: GE work handed in per second (report "ge in")
-    double stall_calls{}, stall_ticks{}, stall_flushes{}; // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall, its runs
+    double stall_calls{}, stall_ticks{}, stall_flushes{}, stall_merged{}; // Persona3DS: sceGeListUpdateStallAddr calls, ticks inside update_stall, its runs
     double front_draw{}, front_sync{};                    // Persona3DS: ticks in renderer draw() / sync() on the game's thread
     double vc_hits{}, vc_uses{};               // vertex cache hits / model draws that asked it
     double guest_us{}, hle_ns{}, render_ns{}, io_ns{}, io_bytes{}, hle_calls{};
@@ -558,6 +558,7 @@ TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {
     t.stall_calls = static_cast<double>(p3p3ds::hle::ge_stall_timing().calls);
     t.stall_ticks = static_cast<double>(p3p3ds::hle::ge_stall_timing().units);
     t.stall_flushes = static_cast<double>(p3p3ds::hle::ge_stall_timing().flushes);
+    t.stall_merged = static_cast<double>(p3p3ds::hle::ge_stall_timing().merged); // P3P3DS
     t.front_draw = static_cast<double>(g_ge_front.draw_ticks);
     t.front_sync = static_cast<double>(g_ge_front.sync_ticks);
     t.vblanks = s.frames;
@@ -638,8 +639,8 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
         // update (comparable with the unbatched runs) and the flushes per second.
         const double stalls = b.stall_calls - a.stall_calls, flushes = b.stall_flushes - a.stall_flushes;
         if (!p3p3ds::hle::ge_stall_timing().detail) { // ge_profile.txt absent: counts only
-            std::snprintf(buf, sizeof buf, " stall: %.1fk/s, %.1fk runs/s (detail: ge_profile.txt)\n", stalls / s.wall / 1000.0,
-                          flushes / s.wall / 1000.0);
+            std::snprintf(buf, sizeof buf, " stall: %.1fk/s, %.1fk runs/s, merged %.0f%% (detail: ge_profile.txt)\n", stalls / s.wall / 1000.0,
+                          flushes / s.wall / 1000.0, stalls > 0 ? 100.0 * (b.stall_merged - a.stall_merged) / stalls : 0.0); // P3P3DS: merged
             text += buf;
             return text;
         }
@@ -688,7 +689,7 @@ std::string split_text(const char *label, const TimeSample &a, const TimeSample 
     return text;
 }
 
-// The three HLE imports with the most time since the previous call, as
+// The five (P3P3DS: was three) HLE imports with the most time since the previous call, as
 // "name:ms/calls" separated by spaces (inclusive time: a wait that sleeps or
 // presents counts that too).
 std::string top_imports(const psprecomp::Runtime &rt) {
@@ -700,7 +701,7 @@ std::string top_imports(const psprecomp::Runtime &rt) {
         if (import.ns > prev.first) deltas.push_back({&import, import.ns - prev.first, import.calls - prev.second});
         prev = {import.ns, import.calls};
     }
-    const std::size_t n = std::min<std::size_t>(3u, deltas.size());
+    const std::size_t n = std::min<std::size_t>(5u, deltas.size()); // P3P3DS: was 3
     std::partial_sort(deltas.begin(), deltas.begin() + static_cast<std::ptrdiff_t>(n), deltas.end(),
                       [](const Delta &x, const Delta &y) { return x.ns > y.ns; });
     std::string out;

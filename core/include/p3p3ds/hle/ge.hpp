@@ -117,6 +117,9 @@ private:
     psprecomp::Runtime *async_rt_{};
     ge::GeRenderer *active_{}; // the renderer execute() calls: renderer_, or the worker's own
     std::atomic<bool> async_pending_{};
+    // P3P3DS: the newest stall update not yet taken by the worker, (id << 32) | stall, 0: none. Updates of the
+    // same list while it waits replace it instead of queueing another task (update_stall, worker_task kind 4).
+    std::atomic<std::uint64_t> stall_slot_{};
     bool in_service_{};
 };
 void register_ge_module(psprecomp::Runtime &, KernelState &);
