@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## .cia runs; exit hang log; MVD input evidence (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS, `.cia` of `42623499` (kernel 2.44): boots, plays the movies (`mvd init 00000000`, 254 pictures, 0 failed), school dungeon; `cores : core2 ok ... movies on core1, GE on core2, lists on core2`; `stall: 32.3k/s ... merged 86%`. The mvd crash of the entry below is gone.
+- [VERIFIED] Maintainer: the movies re-converted with `ref=1` still show the washed-out start of the opening, with a slight part on the left in the right colours, and about 2 s later the movie looks fine. [WRONG] that more than one reference picture is the cause (the change stays: it costs nothing).
+- [VERIFIED] Maintainer: closing the `.cia` (START+SELECT, then HOME and Close) stays on "Closing software...".
+- [INFERRED] leads, MVD: `MvdDecoder::decode` accepts `MVD_STATUS_INCOMPLETEPROCESSING` ("not all of the input NAL-unit buffer was processed", libctru `mvd.h`) as success and does not resubmit the rest; a large first picture cut short would leave a part decoded right and the rest wrong until the next keyframe. Change (`platform/3ds/fork_mvd.hpp`, measurement only): the movie status line adds `nal max N B, incomplete N (first pic N, left max N B)`.
+- Exit: `main` now releases the movie decoder (`fork_movies().clear()`, mvdstdExit) and the DSP (`NdspOutput::shutdown`, ndspExit) itself before `romfsExit`/`gfxExit` instead of leaving them to static destructors after `main`, and appends each finished shutdown step to `sdmc:/persona3ds/exit_log.txt` (closed after each line). [UNVERIFIED] whether that alone ends the hang; the last line written names the step that does not finish.
+
 ## .cia: mvd module crash fixed (kernel 8.0 mapping); movies re-encoded with one reference (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS, the `.cia` of `f162531b`: Luma3DS crash dump `crash_dump_00000011.dmp` (format 1.3): process `mvd` (title 0004013020004102, the New 3DS video decoder module, not the app), ARM11 core 1, data abort (DFSR 0x5, translation fault), FAR 0x14553c00, pc 0x10faf4 in a `ldm r1!` copy loop with r1 = 0x14553c00 and 0x20553c00 on its stack: the module read the app's input buffer at its old-mapping linear address (VA 0x14000000 = PA 0x20000000) and that address was not mapped for it. The RSF asked for kernel 2.33 (firmware 4.5), which gives the app the pre-8.0 linear heap at 0x14000000 (libctru `os.h` `OS_OLD_FCRAM_VADDR`); the `.3dsx`, started by Luma3DS's loader with kernel 8.0 (`hbldr.c` `0xFC00022C`), has it at 0x30000000 and its movies decode.
