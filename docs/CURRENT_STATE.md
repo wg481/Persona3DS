@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Fast path blocked by TEXFLUSH before every draw (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `d6b90214` (report header said `build 6661ef9f`: the id is taken at configure time and `make` did not reconfigure), school dungeon: `join   : slow 26453 other 0 CB:100%`, `merge 687k>264k f0k`, `prep: target 1.0 tex 3.8 sig 7.1 flush 3.4 state 0.5`, `gpu thd: busy 61`; CSV dungeon rows 33-70 speed 72-103 %. Every sampled join off the fast path had TEXFLUSH (`0xCB`) since the previous PRIM, and only it: the CLUT address change was not the blocker, or not alone.
+- [VERIFIED] no renderer acts on TEXFLUSH/TEXSYNC: no `0xCB`/`0xCC` in `core/src/ge` or `platform/3ds/gpu_renderer.cpp`. The 3DS texture cache checks a texture's contents at most once per frame (`bind_texture`, `checked_frame == frame_` is a hit), and the fast path joins only draws of the same frame with unchanged state, so skipping `bind_texture` there returns what it would have.
+- Change (`core/src/hle/ge.cpp`): TEXFLUSH and TEXSYNC no longer move `state_version`; `test_ge_state_version_on_change` expects that. `platform/3ds/CMakeLists.txt`: configure depends on `.git/logs/HEAD`, so `make` after a checkout, pull or commit reconfigures and the report's `build` id names the commit built.
+- [UNVERIFIED] expected: `f` near the joined count, `prep` `tex` and `sig` down on those draws, `join` line near 0 `slow`.
+
 ## Fast path still unused: CLUT address and other non-render registers; cause counter (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on master `6661ef9f` (same-value writes no longer counted), school dungeon: report `merge 567k>218k f0k`, `prep: target 1.3 tex 4.2 sig 7.9 flush 3.7 state 0.6`, `gpu thd: busy 64`; CSV dungeon rows 32-62 speed 91-103 %, `gpu_busy_pct` 45-81. The fast path is still never taken, so a register outside the batch signature changes between joined draws.

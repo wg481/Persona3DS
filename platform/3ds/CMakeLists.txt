@@ -128,6 +128,11 @@ target_link_libraries(p3p3ds_core PUBLIC psprecomp_runtime)
 
 execute_process(COMMAND git -C "${P3P_ROOT}" rev-parse --short HEAD
                 OUTPUT_VARIABLE P3P_BUILD_ID OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+# P3P3DS: re-run this configure step whenever HEAD moves (checkout, pull, commit), so the report's
+# `build` line names the commit that was built and not the one that was configured.
+if(EXISTS "${P3P_ROOT}/.git/logs/HEAD")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${P3P_ROOT}/.git/logs/HEAD")
+endif()
 # GE renderer on the PICA200: vertex shader assembled by picasso and embedded.
 ctr_add_shader_library(p3p_ge_shader "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ge.v.pica" OUTPUT "${CMAKE_BINARY_DIR}/ge.shbin")
 dkp_add_embedded_binary_library(p3p_ge_shader_bin p3p_ge_shader)

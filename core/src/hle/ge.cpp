@@ -243,7 +243,7 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
     // rebuilt its batch signature on core 2 although 62 % of the draws then joined the batch
     // (docs/CURRENT_STATE.md). A write of the value a register already holds no longer counts.
     // P3P3DS: the CLUT address (the palette counts through LOADCLUT), the transfer registers (TRXKICK
-    // counts), the matrix selects and BBOX feed no renderer state: they never move state_version.
+    // counts), the matrix selects, BBOX, TEXFLUSH and TEXSYNC feed no renderer state: they never move it.
     auto bump=[&]{ ++regs_.state_version; regs_.changed_ops[op>>5]|=1u<<(op&31u); };
     auto bump_if=[&](bool changed){ if(changed) bump(); };
     auto set_float=[&](float &f){ const float v=ge::ge_float(arg); bump_if(std::bit_cast<std::uint32_t>(f)!=std::bit_cast<std::uint32_t>(v)); f=v; };
@@ -254,7 +254,11 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
     case 0x07: case 0x2A: case 0x3A: case 0x3C: case 0x3E: case 0x40:
     case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xEB: case 0xEC: case 0xEE: break; // P3P3DS: see bump
     case 0xC4: bump_if(old!=arg); break; // P3P3DS: and below when the palette changes
-    case 0xCB: case 0xCC: case 0xEA: bump(); break; // P3P3DS: TEXFLUSH, TEXSYNC, TRXKICK act beyond the register
+    // P3P3DS: TEXFLUSH and TEXSYNC: Persona issues TEXFLUSH before about every draw (report `join : ... CB:100%`),
+    // and no renderer acts on them: the 3DS texture cache checks contents at most once per frame
+    // (gpu_renderer.cpp bind_texture, checked_frame), the fast path only joins draws of the same frame.
+    case 0xCB: case 0xCC: break;
+    case 0xEA: bump(); break; // P3P3DS: TRXKICK writes memory and targets
     default: bump_if(old!=arg); break;
     }
     state_.registers[op]=arg;
