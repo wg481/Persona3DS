@@ -2,6 +2,11 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Opening colours and .cia exit confirmed (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS, `.cia` of `f8e0bad8`: the opening looks right from the start ("title looks perfect"); movie status `incomplete 1 (first pic 0, left max 12936 B), resent 1 ok 1`: the first IDR slice, handed in again, was taken. HOME and Close end the app; `exit_log.txt` lists every step from `GPU idle` to `gfx closed, returning from main` (5.4 s on the exit screen, then 113 ms of shutdown).
+- [VERIFIED] same run, school dungeon (CSV rows 45-73): speed 93-102 %; the heaviest seconds (rows 66-73, 35-38k draws/s) have the game's core at `aot 75-79 idle 0` and core 2 68-74 % busy, `sceGeListUpdateStallAddr` about 1.9 us per call (merged 84 %). Next target: the game's core.
+
 ## Opening: the first IDR slice was not decoded; exit hang inside the kernel teardown (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS, `.cia` of `a81862aa`, opening then title, START+SELECT: movie status `nal max 12936 B, incomplete 1 (first pic 0, left max 12936 B)`: exactly one unit came back INCOMPLETEPROCESSING, in the first picture, with all of it (12,936 bytes, the largest unit, i.e. the first IDR slice) left. That picture's slice was never decoded, so the P pictures after it had no reference until the next keyframe: the washed-out start. [WRONG] (entry below) that the lead was only a possibility: it is the cause, pending the fix's check.
