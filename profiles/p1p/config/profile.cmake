@@ -13,3 +13,9 @@ set(P3P_PROFILE_BOOTSTRAP_VERIFIED OFF)
 set(P3P_PROFILE_SMDH_NAME "Persona3DS")
 set(P3P_PROFILE_SMDH_DESCRIPTION "Persona (PSP) recompilation")
 set(P3P_PROFILE_SMDH_AUTHOR "wg481, based on P3P3DS by enderlit aka endercodezz")
+# .cia (make -C build/3ds cia, platform/3ds/cia/p3p3ds.rsf.in): process name (at most 8 characters),
+# product code, and the title's unique id (homebrew range 0x00300-0xF7FFF; another app with the same id
+# would be replaced on install).
+set(P3P_PROFILE_CIA_TITLE "Persona")
+set(P3P_PROFILE_CIA_PRODUCT_CODE "CTR-H-P1PE")
+set(P3P_PROFILE_CIA_UNIQUE_ID "0xF5013")

@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Optional .cia build (2026-10-14)
+
+- Change: target `cia` (`make -C build/3ds cia`, not part of `all`) runs `platform/3ds/cia/make_cia.cmake`: `bannertool makebanner` (banner.png, audio.wav), `bannertool makesmdh` (icon.png, else the `.3dsx`'s `p3p3ds.smdh`), `makerom -f cia ... -rsf cia/p3p3ds.rsf -elf p3p3ds.elf`, all from `P3P_BANNER_DIR` (default `<repo>/banner`, each user's own folder, not tracked). The tools run in the build directory with relative paths (native Windows tools under MSYS2 get no `/c/...` paths). RSF template `platform/3ds/cia/p3p3ds.rsf.in` (values from `profiles/p1p/config/profile.cmake`: title `Persona`, `CTR-H-P1PE`, unique id `0xF5013`).
+- RSF settings: SystemModeExt 124MB (the `.3dsx` runs with 126,976 KiB, report `app mem`), 804MHz, L2 cache, `CanAccessCore2`, affinity mask 3 (core 1 for movie decoding), services APT:U ac:u cfg:u dsp::DSP fs:USER gsp::Gpu gsp::Lcd hid:USER mvd:STD ptm:u, SD access, romfs `romfs` (the decrypted EBOOT). Dependencies with title ids built as Luma3DS's 3dsx loader builds them (`sysmodules/loader/source/hbldr.c`: `0x0004013000000000 | uid << 8 | 2`, New 3DS-only `| 0x20000000`; mvd uid 0x41 -> `0004013020004102`).
+- [VERIFIED] host check (makerom and ctrtool built from 3DSGuy/Project_CTR, a test ARM ELF, stub banner/icon): the script produces a `.cia`; ctrtool shows title id `000400000f501300`, product code `CTR-H-P1PE`, System mode (New3DS) 124MB, 804MHz, L2 cache YES, affinity mask 3, Access Core 2 YES, the dependency list including `0004013020004102`, a RomFS. Missing tools or files stop the target with a message naming them.
+- [UNVERIFIED] on hardware: installing and running the `.cia` (report `cores:` line for core 1/2, `movies : ... mvd init 00000000`, heap).
+
 ## Batch fast path working in the dungeon: core 2 prep 23.7 -> 14.3 % (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS on `1dd34465` (header now right), same school-dungeon walk: `merge 738k>285k f453k` (every one of the 453k joined draws took the fast path), `join   : slow 0 other 0`; last 10 s `draw: prep 14.3` (23.7 on `34d6ec67`) = `target 0.5 tex 3.4 sig 2.3 flush 3.9 state 0.6`; `gpu thd: busy 58 wait 7.1` (65 / 11.6); run average speed 105 % (98 %). Fast path, `join` counter and the TEXFLUSH/CLUT-address/non-render-register changes of the two entries below confirmed.
