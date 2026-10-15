@@ -52,6 +52,20 @@ extern std::uint64_t g_runtime_thread_switch_generation_fast;
 #define PSPRECOMP_CHAIN_INLINE PSPRECOMP_RUNTIME_FORCEINLINE
 #endif
 
+// P3P3DS: block sampling profile (Persona3DS, docs/CURRENT_STATE.md 2026-10-14). Generated code
+// stores the guest address of every labelled block it enters when PSPRECOMP_AOT_PROFILE is defined
+// (the New 3DS build's P3P_AOT_PROFILE option); a host thread samples the value. Otherwise the macro
+// is empty and the generated code is unchanged in effect.
+extern volatile std::uint32_t g_aot_profile_block;
+// P3P3DS: imports running on the game's thread (nested count), for the same sampler: a sample taken
+// while it is non-zero is HLE time (including waits), not generated code.
+extern volatile std::uint32_t g_aot_profile_in_import;
+#if defined(PSPRECOMP_AOT_PROFILE)
+#define PSPRECOMP_PROFILE_BLOCK(pc) (::psprecomp::g_aot_profile_block = (pc))
+#else
+#define PSPRECOMP_PROFILE_BLOCK(pc) ((void)0)
+#endif
+
 // The cross-unit hot-register cache (AotHotRegisterCache) was removed here.  It
 // kept seven GPRs and six scalar FPRs live in a second object alongside
 // AllegrexContext for the whole duration of a generated unit.  Inside the

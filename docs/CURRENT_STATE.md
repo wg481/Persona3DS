@@ -2,6 +2,13 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Release bottom screen; game-code sampling profile (measurement build) (2026-10-14)
+
+- Bottom screen (maintainer's choice: short status plus a toggle, release by default): `status_text` (title, disc id, credits, build, fps and speed, START+SELECT and the touch hint), redrawn with the 5 s report; touching the screen switches to the full report (`report_text`) and back (touch is not mapped to the PSP pad); an empty `sdmc:/persona3ds/debug_screen.txt` starts with the full report. `report.txt` on the SD card is unchanged.
+- Why the profile: the heaviest dungeon seconds (`f8e0bad8` CSV rows 66-73, 35-38k draws/s) have the game's core at `aot 75-79 idle 0`, i.e. the generated game code itself; the counters cannot say which code.
+- Change: `recomp/PSPRecomp` codegen emits `PSPRECOMP_PROFILE_BLOCK(<pc>)` after every block label (empty unless `PSPRECOMP_AOT_PROFILE`; all units regenerate once), `runtime.hpp`/`runtime.cpp` hold `g_aot_profile_block` and `g_aot_profile_in_import` (counted by the HLE timer of every import). CMake `-DP3P_AOT_PROFILE=ON` (3DS) defines it for the AOT units and starts `AotSampler` (a thread on core 1, else core 2, one sample per ms). At START+SELECT it writes `sdmc:/persona3ds/aot_profile.txt`: generated-code vs import samples, then the 60 hottest functions (function = between JAL targets in the executable segment) with sample share, size, instruction mix (JAL, VFPU, FPU, loads, stores, branches) and their hottest blocks. Checked: host build and CTest 29/29, the macro both ways (a test unit), `main.cpp` syntax with and without the option (arm-none-eabi-g++ against libctru/citro3d headers).
+- Limits [INFERRED]: a block is recorded when entered, so after a chained call returns, time until the caller's next labelled block counts for the callee; functions reached only by JR or pointers merge into the preceding JAL target.
+
 ## Opening colours and .cia exit confirmed (2026-10-14)
 
 - [VERIFIED] Maintainer's New 3DS, `.cia` of `f8e0bad8`: the opening looks right from the start ("title looks perfect"); movie status `incomplete 1 (first pic 0, left max 12936 B), resent 1 ok 1`: the first IDR slice, handed in again, was taken. HOME and Close end the app; `exit_log.txt` lists every step from `GPU idle` to `gfx closed, returning from main` (5.4 s on the exit screen, then 113 ms of shutdown).

@@ -1065,6 +1065,7 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
 
     for (const auto block_start : function.entry_labels) {
         body << "L_" << psprecomp::hex32(block_start).substr(2) << ":\n";
+        body << "    PSPRECOMP_PROFILE_BLOCK(" << psprecomp::hex32(block_start) << "u); // P3P3DS: empty unless PSPRECOMP_AOT_PROFILE\n";
         std::uint32_t pc = block_start;
         while (function.instructions.contains(pc)) {
             if (pc != block_start && function.entry_labels.contains(pc)) {

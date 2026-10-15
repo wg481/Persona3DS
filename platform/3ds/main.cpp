@@ -56,6 +56,7 @@
 #include <filesystem>
 #include <functional> // P3P3DS: std::greater (draw trace)
 #include <iostream>
+#include <map> // P3P3DS: AotSampler
 #include <malloc.h>
 #include <memory>
 #include <new>
@@ -118,6 +119,7 @@ struct Stats {
     std::uint32_t last_topaddr{};
     double fps{}, vblank_rate{};
     std::uint32_t buttons{};
+    bool details{}; // P3P3DS: bottom screen shows the full report (debug_screen.txt, or toggled by touch)
     std::string status{"booting"};
     std::string iso;
     std::string cores; // probe_cores() at start
@@ -235,6 +237,114 @@ public:
         pad = p;
     }
 };
+
+#if defined(P3P3DS_AOT_PROFILE)
+// P3P3DS: measurement build (CMake P3P_AOT_PROFILE): every millisecond a thread on core 1 (else core 2)
+// reads which guest block the game's core entered last (psprecomp::g_aot_profile_block, stored by the
+// generated code) or whether it is inside an import; write() attributes the blocks to functions (the
+// targets of JAL instructions in the executable segment) into sdmc:/persona3ds/aot_profile.txt.
+class AotSampler {
+public:
+    void start() {
+        for (int core : {1, 2}) {
+            thread_ = threadCreate(&AotSampler::entry, this, 16 * 1024, 0x18, core, false);
+            if (thread_ != nullptr) { core_ = core; return; }
+        }
+    }
+    void stop() {
+        if (thread_ == nullptr) return;
+        quit_.store(true, std::memory_order_release);
+        threadJoin(thread_, U64_MAX);
+        threadFree(thread_);
+        thread_ = nullptr;
+    }
+    void set_code(std::uint32_t start, std::uint32_t size) { code_start_ = start; code_size_ = size; }
+    void write(const psprecomp::GuestMemory &memory, const char *path) const {
+        std::FILE *f = std::fopen(path, "w");
+        if (f == nullptr) return;
+        const std::uint64_t aot = total_ - in_import_;
+        std::fprintf(f, "samples %llu (1 ms, core %d): generated code %llu, imports %llu\n", static_cast<unsigned long long>(total_), core_,
+                     static_cast<unsigned long long>(aot), static_cast<unsigned long long>(in_import_));
+        // Function starts: JAL targets inside the executable segment.
+        std::vector<std::uint32_t> starts;
+        const std::uint8_t *code = code_size_ != 0u ? memory.raw_pointer(code_start_, code_size_) : nullptr;
+        for (std::uint32_t off = 0; code != nullptr && off + 4u <= code_size_; off += 4u) {
+            std::uint32_t w;
+            std::memcpy(&w, code + off, 4u);
+            if ((w >> 26) != 3u) continue;
+            const std::uint32_t target = ((code_start_ + off + 4u) & 0xF0000000u) | ((w & 0x03FFFFFFu) << 2);
+            if (target >= code_start_ && target < code_start_ + code_size_) starts.push_back(target);
+        }
+        std::sort(starts.begin(), starts.end());
+        starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+        struct Fn { std::uint32_t start, end; std::uint64_t samples; std::vector<std::pair<std::uint32_t, std::uint32_t>> blocks; };
+        std::map<std::uint32_t, Fn> fns;
+        for (const auto &[block, n] : counts_) {
+            auto it = std::upper_bound(starts.begin(), starts.end(), block);
+            const std::uint32_t start = it == starts.begin() ? block : *(it - 1);
+            const std::uint32_t end = it == starts.end() ? code_start_ + code_size_ : *it;
+            auto &fn = fns[start];
+            fn.start = start;
+            fn.end = end;
+            fn.samples += n;
+            fn.blocks.emplace_back(block, n);
+        }
+        std::vector<const Fn *> order;
+        for (const auto &[k, fn] : fns) order.push_back(&fn);
+        std::sort(order.begin(), order.end(), [](const Fn *a, const Fn *b) { return a->samples > b->samples; });
+        std::fprintf(f, "%zu functions from %zu JAL targets in %08lx+%lx\n\n", fns.size(), starts.size(),
+                     static_cast<unsigned long>(code_start_), static_cast<unsigned long>(code_size_));
+        std::fprintf(f, "%%gen   samples  function  bytes   jal  vfpu   fpu  load store branch  hottest blocks\n");
+        for (std::size_t i = 0; i < order.size() && i < 60u; ++i) {
+            const Fn &fn = *order[i];
+            // Instruction mix of the function (opcode classes), to tell math, copies and logic apart.
+            unsigned jal = 0, vfpu = 0, fpu = 0, load = 0, store = 0, branch = 0;
+            const std::uint32_t bytes = fn.end > fn.start && fn.end - fn.start <= 0x10000u ? fn.end - fn.start : 0u;
+            const std::uint8_t *p = bytes != 0u ? memory.raw_pointer(fn.start, bytes) : nullptr;
+            for (std::uint32_t off = 0; p != nullptr && off < bytes; off += 4u) {
+                std::uint32_t w;
+                std::memcpy(&w, p + off, 4u);
+                const std::uint32_t op = w >> 26;
+                if (op == 3u) ++jal;
+                else if (op == 0x18u || op == 0x19u || op == 0x1Bu || op == 0x32u || op == 0x34u || op == 0x35u || op == 0x36u ||
+                         op == 0x37u || op == 0x3Au || op == 0x3Cu || op == 0x3Du || op == 0x3Eu || op == 0x3Fu || op == 0x12u) ++vfpu;
+                else if (op == 0x11u || op == 0x31u || op == 0x39u) ++fpu;
+                else if (op >= 0x20u && op <= 0x27u) ++load;
+                else if (op >= 0x28u && op <= 0x2Fu) ++store;
+                else if ((op >= 0x04u && op <= 0x07u) || (op >= 0x14u && op <= 0x17u) || op == 0x01u) ++branch;
+            }
+            auto blocks = fn.blocks;
+            std::sort(blocks.begin(), blocks.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+            std::fprintf(f, "%5.1f %9llu  %08lx %6lu %5u %5u %5u %5u %5u %6u ", aot ? 100.0 * static_cast<double>(fn.samples) / static_cast<double>(aot) : 0.0,
+                         static_cast<unsigned long long>(fn.samples), static_cast<unsigned long>(fn.start), static_cast<unsigned long>(bytes),
+                         jal, vfpu, fpu, load, store, branch);
+            for (std::size_t b = 0; b < blocks.size() && b < 4u; ++b)
+                std::fprintf(f, " %08lx:%lu", static_cast<unsigned long>(blocks[b].first), static_cast<unsigned long>(blocks[b].second));
+            std::fprintf(f, "\n");
+        }
+        std::fclose(f);
+    }
+
+private:
+    static void entry(void *self) {
+        auto &s = *static_cast<AotSampler *>(self);
+        while (!s.quit_.load(std::memory_order_acquire)) {
+            svcSleepThread(1000000);
+            ++s.total_;
+            if (psprecomp::g_aot_profile_in_import != 0u) { ++s.in_import_; continue; }
+            const std::uint32_t block = psprecomp::g_aot_profile_block;
+            ++s.counts_[block];
+        }
+    }
+    Thread thread_{};
+    int core_{-1};
+    std::atomic<bool> quit_{false};
+    std::unordered_map<std::uint32_t, std::uint32_t> counts_;
+    std::uint64_t total_{}, in_import_{};
+    std::uint32_t code_start_{}, code_size_{};
+};
+AotSampler g_sampler;
+#endif
 
 p3p3ds::n3ds::GpuRenderer *g_gpu = nullptr;
 p3p3ds::n3ds::Core1Worker g_core1; // Persona3DS: background work on core 1 (fork_core1.hpp)
@@ -747,6 +857,27 @@ std::string profile_text(const Stats &s) {
     return text + buf + gpu_text();
 }
 
+// P3P3DS: the bottom screen of release builds (maintainer, 2026-10-14): title, build, speed and the
+// controls; touching the screen switches to the full report (report_text) and back.
+std::string status_text(const Stats &s, p3p3ds::KernelState &k) {
+    const double wall = static_cast<double>(osGetTime() - s.start_ms) / 1000.0;
+    const double guest = static_cast<double>(k.threads().now()) / 1e6;
+    char buf[512];
+    std::snprintf(buf, sizeof buf,
+        "%s\n%s\n%s\n"
+        "static recompilation port\n"
+        "by %s\n"
+        "build %s\n"
+        "\n"
+        "%.1f fps, %.0f%% speed\n"
+        "\n"
+        "START+SELECT: quit\n"
+        "Touch the screen: details\n",
+        p3p3ds::profile::app_name, p3p3ds::profile::game_title, p3p3ds::profile::disc_id_display, kAuthor, P3P3DS_BUILD_ID,
+        s.fps, wall > 0 ? 100.0 * guest / wall : 0.0);
+    return buf;
+}
+
 std::string report_text(const Stats &s, const psprecomp::Runtime &rt, p3p3ds::KernelState &k) {
     const u64 now = osGetTime();
     const double wall = static_cast<double>(now - s.start_ms) / 1000.0;
@@ -994,6 +1125,13 @@ int main() {
         const auto elf = psprecomp::Elf32Image::from_file("romfs:/eboot.elf");
         const auto entry = elf.runtime_entry();
         (void)elf.load_and_relocate(rt.memory());
+#if defined(P3P3DS_AOT_PROFILE)
+        for (std::size_t i = 0; i < elf.segments().size(); ++i) { // the executable segment, where load_and_relocate put it
+            const auto &seg = elf.segments()[i];
+            if (seg.type == 1u && (seg.flags & 1u) != 0u && seg.memory_size != 0u)
+                g_sampler.set_code(elf.segment_runtime_address(i), seg.memory_size);
+        }
+#endif
         psprecomp::apply_generated_patches(rt.memory());
         const auto module = elf.find_module_info(rt.memory());
         if (!module) throw std::runtime_error("missing module info");
@@ -1062,6 +1200,11 @@ int main() {
         g_gpu = gpu.get();
         // Persona3DS: unchanged textures are re-checked less often (GpuRenderer::set_texture_backoff); an empty
         // sdmc:/persona3ds/tex_check_every_frame.txt checks every texture every frame, as before.
+        // P3P3DS: an empty sdmc:/persona3ds/debug_screen.txt starts with the full report on the bottom screen.
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/debug_screen.txt", "r")) {
+            stats.details = true;
+            std::fclose(f);
+        }
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/tex_check_every_frame.txt", "r")) {
             gpu->set_texture_backoff(false);
             std::fclose(f);
@@ -1232,6 +1375,11 @@ int main() {
                 else hid->pad = {};
             }
             stats.buttons = hid->pad.buttons;
+            if ((hidKeysDown() & KEY_TOUCH) && !save_menu.active) { // P3P3DS: details on/off
+                stats.details = !stats.details;
+                std::printf("\x1b[2J");
+                show(stats.details ? report_text(stats, rt, kernel) : status_text(stats, kernel));
+            }
             if ((hidKeysHeld() & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) {
                 rt.stop("Quit by user (START+SELECT)");
                 throw psprecomp::FrontierHalt{};
@@ -1288,7 +1436,7 @@ int main() {
                 if (now - stats.last_report_ms >= 5000u) {
                     const u64 ui_start = svcGetSystemTick();
                     const std::string text = report_text(stats, rt, kernel);
-                    if (!save_menu.active) show(text);
+                    if (!save_menu.active) show(stats.details ? text : status_text(stats, kernel)); // P3P3DS
                     post_report(text);
                     stats.last_report_ms = now;
                     stats.ui_ticks += svcGetSystemTick() - ui_start;
@@ -1297,6 +1445,10 @@ int main() {
         };
         stage = "run";
         start_report_writer();
+#if defined(P3P3DS_AOT_PROFILE)
+        g_sampler.start();
+        stats.cores += ", AOT profile";
+#endif
         std::printf("Starting game...\n");
         try { rt.run(entry, ~0ull); }
         catch (const psprecomp::FrontierHalt &) {}
@@ -1305,6 +1457,10 @@ int main() {
         if (!rt.stopped()) rt.stop(std::string("Exception: ") + fatal);
     }
     if (!rt.stopped()) rt.stop("Runtime returned");
+#if defined(P3P3DS_AOT_PROFILE)
+    g_sampler.stop();
+    g_sampler.write(rt.memory(), P3P_PROFILE_SD_BASE "/aot_profile.txt");
+#endif
     if (g_async != nullptr) g_async->drain(); // the exit screen runs aptMainLoop: citro3d idle
     // P3P3DS: finish the GPU's work now, before the exit screen (where HOME and Close can take the GPU away)
     if (g_gpu != nullptr) {
