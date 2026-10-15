@@ -87,7 +87,7 @@ On the SD card:
 | `/3ds/dspfirm.cdc` | DSP firmware dump, needed for sound |
 | `/persona3ds/report.txt` | written by the app on exit (START+SELECT): speed, memory, sound, music, movie and renderer counters |
 
-Optional switch files in `/persona3ds/` (create an empty file to turn one on): `no_gpu_thread.txt` (graphics on the main core instead of core 2), `dump_every.txt` (contains N: saves every Nth vblank as a BMP to `/persona3ds/frames/`, slow), `draw_trace.txt` (logs the renderer's draws of a few movie frames to `draw_trace_out.txt`), `gpu_trace.txt` (upstream's renderer trace: the first 1,200 presents and their screen-space draws to `gpu_trace.log`), `play_movies.txt` (no automatic START presses through unconverted movies).
+Optional switch files in `/persona3ds/` (create an empty file to turn one on): `no_gpu_thread.txt` (graphics on the main core instead of core 2), `dump_every.txt` (contains N: saves every Nth vblank as a BMP to `/persona3ds/frames/`, slow), `draw_trace.txt` (logs the renderer's draws of a few movie frames to `draw_trace_out.txt`; may list movie picture counts, e.g. `30 90 150`, to trace 8 presents at each), `no_frame_split.txt` (submit each GPU frame whole at its end instead of in parts), `gpu_trace.txt` (upstream's renderer trace: the first 1,200 presents and their screen-space draws to `gpu_trace.log`), `play_movies.txt` (no automatic START presses through unconverted movies).
 
 The `.3dsx` embeds code generated from your game executable: it is for your own use, never for distribution.
 

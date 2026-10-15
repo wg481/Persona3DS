@@ -54,6 +54,7 @@ struct GpuStats {
     // GPU command words added by draws (frames not flushed in between), and
     // why frames were submitted early: command buffer or vertex arena full.
     std::uint64_t command_words{}, counted_draws{}, command_flushes{}, arena_flushes{};
+    std::uint64_t frame_splits{}; // P3P3DS: split_frame
     std::uint64_t model_batches{}; // GPU draws that model draws were merged into
     std::uint64_t fast_draws{};    // model draws that joined a batch on the fast path
     // P3P3DS: sampled (1 in 16) model draws that joined the batch off the fast path: per opcode that
@@ -91,7 +92,7 @@ public:
     [[nodiscard]] std::string target_text() const;
     // P3P3DS: write one line per draw (target, texture, blend, fixed colours, vertex
     // ranges) and per present to `path` for the next `presents` presents (movie flicker).
-    void start_trace(const char *path, unsigned presents);
+    void start_trace(const char *path, unsigned presents, std::uint64_t picture = 0); // P3P3DS: appends; picture: header line
     [[nodiscard]] const ge::VertexCacheStats &vertex_cache_stats() const { return vertex_cache_.stats(); }
     [[nodiscard]] bool vertex_cache_enabled() const { return vertex_cache_enabled_; }
     // The last presented picture came from guest memory (CPU-written, e.g. a movie frame).
@@ -103,6 +104,7 @@ public:
     // 8th frame (title screen: hashing was 45 % of core 2; docs/CURRENT_STATE.md 2026-10-14). False:
     // every texture every frame, as before.
     void set_texture_backoff(bool on) { texture_backoff_ = on; }
+    void set_frame_split(bool on) { frame_split_ = on; } // P3P3DS: split_frame
     // P3P3DS: frees every cached texture the current frame does not use (linear memory for another
     // user, e.g. the movie decoder's 3 MiB work buffer); returns the bytes freed. Call it only while
     // the renderer is idle (AsyncRenderer::call_idle).
@@ -171,6 +173,7 @@ private:
     // Fills the open run's block and returns its unused tail to the arena.
     void close_run();
     void flush_batch();
+    void split_frame(); // P3P3DS: hand the commands so far to the PICA200 while the frame goes on
     void evict_textures(std::uint32_t needed);
     static constexpr std::uint32_t kTrimAll = 0xFFFFFFFFu >> 1; // P3P3DS: evict_textures(kTrimAll) frees all unused
 
@@ -257,6 +260,8 @@ private:
     unsigned draw_trace_left_{};
     std::uint32_t texture_bytes_{};
     bool texture_backoff_{true}; // P3P3DS: set_texture_backoff
+    bool frame_split_{true};     // P3P3DS: split_frame
+    std::uint32_t splits_{}, flushed_vertex_{}, flushed_index_{}; // P3P3DS: this GPU frame's splits, cache-flushed bytes
     std::uint8_t *arena_{};       // linear memory for vertices and indices of the open GPU frame
     std::uint32_t arena_used_{};
     std::vector<ge::ModelVertex> model_;

@@ -54,6 +54,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional> // P3P3DS: std::greater (draw trace)
 #include <iostream>
 #include <malloc.h>
 #include <memory>
@@ -471,12 +472,12 @@ void write_bmp(const char *path, const std::vector<std::uint8_t> &rgb, std::uint
 std::string gpu_text() {
     if (g_gpu == nullptr) return {};
     const auto &g = g_gpu->gpu_stats();
-    char buf[448]; // Persona3DS: was 384 (line count added)
+    char buf[512]; // Persona3DS: was 384 (line count added; P3P3DS: split count)
     std::snprintf(buf, sizeof buf,
         "gpu    : draws %llu tris %llu skip %llu lines %llu\n"
         "         tex %lu up %llu hit %llu rtt %llu\n"
         "         present gpu %llu cpu %llu same %llu\n"
-        "         flush cmd %llu arena %llu w/draw %llu\n"
+        "         flush cmd %llu arena %llu w/draw %llu split %llu\n"
         "movie  : skip %llu rtt %llu merge %lluk>%lluk f%lluk\n",
         static_cast<unsigned long long>(g.draws), static_cast<unsigned long long>(g.triangles),
         static_cast<unsigned long long>(g.skipped_prims), static_cast<unsigned long long>(g.line_prims), static_cast<unsigned long>(g.textures),
@@ -485,6 +486,7 @@ std::string gpu_text() {
         static_cast<unsigned long long>(g.cpu_presents), static_cast<unsigned long long>(g.skipped_presents),
         static_cast<unsigned long long>(g.command_flushes), static_cast<unsigned long long>(g.arena_flushes),
         static_cast<unsigned long long>(g.counted_draws != 0u ? g.command_words / g.counted_draws : 0u),
+        static_cast<unsigned long long>(g.frame_splits), // P3P3DS
         static_cast<unsigned long long>(g_skip_presses), static_cast<unsigned long long>(g.cpu_to_target),
         static_cast<unsigned long long>(g.model_draws / 1000u), static_cast<unsigned long long>(g.model_batches / 1000u),
         static_cast<unsigned long long>(g.fast_draws / 1000u));
@@ -1054,6 +1056,13 @@ int main() {
             std::fclose(f);
             stats.cores += ", tex check every frame";
         }
+        // P3P3DS: GPU frames are handed to the PICA200 in parts while they are built (GpuRenderer::split_frame);
+        // an empty sdmc:/persona3ds/no_frame_split.txt submits each frame whole at its end, as before.
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_frame_split.txt", "r")) {
+            gpu->set_frame_split(false);
+            std::fclose(f);
+            stats.cores += ", no frame split";
+        }
         // sdmc:/persona3ds/gpu_trace.txt present: presents and screen-space draws of the
         // first 1,200 presents (about 20 s) to sdmc:/persona3ds/gpu_trace.log.
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/gpu_trace.txt", "r")) {
@@ -1154,14 +1163,27 @@ int main() {
             g_ndsp->pump(kernel.threads().now()); // Persona3DS: queue the sound blocks the virtual clock has passed
             // Persona3DS: sdmc:/persona3ds/draw_trace.txt -> trace 8 presents of the movie once 60 pictures were
             // shown, into draw_trace_out.txt (one line per draw / upload / present; movie flicker evidence).
+            // P3P3DS: the file may list movie picture counts ("30 90 150"): 8 presents are traced at each,
+            // appended under a "trace at picture N" line (opening-movie colours, docs/CURRENT_STATE.md).
             static bool trace_checked = false;
-            if (!trace_checked && p3p3ds::hle::media::fork_movies().stats().pictures >= 60u) {
+            static std::vector<std::uint64_t> trace_at;
+            if (!trace_checked) {
                 trace_checked = true;
                 if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/draw_trace.txt", "r")) {
+                    unsigned long n = 0;
+                    while (trace_at.size() < 64u && std::fscanf(f, "%lu", &n) == 1) trace_at.push_back(n);
                     std::fclose(f);
-                    if (g_async != nullptr) g_async->post([](p3p3ds::ge::GeRenderer &) { g_gpu->start_trace(P3P_PROFILE_SD_BASE "/draw_trace_out.txt", 8u); });
-                    else g_gpu->start_trace(P3P_PROFILE_SD_BASE "/draw_trace_out.txt", 8u);
+                    if (trace_at.empty()) trace_at.push_back(60u);
+                    std::sort(trace_at.begin(), trace_at.end(), std::greater<>());
+                    std::remove(P3P_PROFILE_SD_BASE "/draw_trace_out.txt");
                 }
+            }
+            const std::uint64_t pictures = p3p3ds::hle::media::fork_movies().stats().pictures;
+            if (!trace_at.empty() && pictures >= trace_at.back()) {
+                while (!trace_at.empty() && pictures >= trace_at.back()) trace_at.pop_back();
+                auto start = [pictures] { g_gpu->start_trace(P3P_PROFILE_SD_BASE "/draw_trace_out.txt", 8u, pictures); };
+                if (g_async != nullptr) g_async->post([start](p3p3ds::ge::GeRenderer &) { start(); });
+                else start();
             }
             // citro3d must be idle on the GE worker before APT may suspend the
             // application (HOME menu); the game already waited for its lists.

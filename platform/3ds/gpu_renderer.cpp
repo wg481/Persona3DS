@@ -40,6 +40,15 @@ constexpr std::uint32_t kCommandBufferBytes = 0xC0000; // C3D_Init
 // submitted (3ds/citro3d/source/base.c). The live fill comes from libctru.
 constexpr float kCmdBufFlushUsage = 0.75f;
 
+// P3P3DS: citro3d's GX command queue. C3D_FrameBegin stops it and C3D_FrameEnd starts it, so the PICA200
+// gets a frame's commands only at its end and core 2 then waits in the next C3D_FrameBegin for all of
+// it (report `ge: wait`, `gpu_wait_pct` up to 18 % in the heaviest dungeon views). split_frame starts the
+// queue mid-frame. The queue is the first member of citro3d's context (3ds/citro3d source/internal.h
+// C3D_Context, `__C3D_Context` in source/base.c), which has no public accessor.
+extern "C" gxCmdQueue_s __C3D_Context;
+constexpr std::uint32_t kSplitWords = 4096u; // command words between splits (about 120 model draws)
+constexpr std::uint32_t kMaxSplits = 8u;     // per GPU frame; each takes one of the queue's 32 entries
+
 float command_buffer_fill() {
     u32 *buffer = nullptr;
     u32 size = 0, offset = 0;
@@ -278,6 +287,7 @@ void GpuRenderer::begin_frame() {
     arena_used_ = 0;
     last_alloc_ = 0;
     index_used_ = 0;
+    splits_ = flushed_vertex_ = flushed_index_ = 0u; // P3P3DS: split_frame
     bound_ = nullptr;
     bound_screen_ = false;
     for (auto &t : deferred_free_) C3D_TexDelete(&t);
@@ -290,8 +300,9 @@ void GpuRenderer::begin_frame() {
 // GX_CMDLIST_FLUSH makes citro3d flush just the command list.
 void GpuRenderer::end_frame() {
     flush_batch();
-    if (arena_used_ != 0u) GSPGPU_FlushDataCache(arena_, arena_used_);
-    if (index_used_ != 0u) GSPGPU_FlushDataCache(arena_ + kVertexBytes, index_used_);
+    // P3P3DS: only what split_frame has not flushed yet
+    if (arena_used_ > flushed_vertex_) GSPGPU_FlushDataCache(arena_ + flushed_vertex_, arena_used_ - flushed_vertex_);
+    if (index_used_ > flushed_index_) GSPGPU_FlushDataCache(arena_ + kVertexBytes + flushed_index_, index_used_ - flushed_index_);
     C3D_FrameEnd(GX_CMDLIST_FLUSH);
     in_frame_ = false;
 }
@@ -755,6 +766,28 @@ void GpuRenderer::flush_batch() {
     C3D_DrawElements(GPU_TRIANGLES, static_cast<int>(count), C3D_UNSIGNED_SHORT, dst);
     ++gpu_stats_.draws;
     ++gpu_stats_.model_batches;
+    split_frame();
+}
+
+// P3P3DS: after kSplitWords command words, the commands so far go to the PICA200 now (the vertices and
+// indices they read are flushed from the data cache first) and the queue is started, so the GPU draws
+// while core 2 builds the rest of the frame. Called between batches (no open run, no pending batch).
+// The vertex arena is only appended to within a frame and reused after C3D_FrameBegin's wait, as before.
+void GpuRenderer::split_frame() {
+    if (!frame_split_ || !in_frame_ || run_.active || batch_active_ || splits_ >= kMaxSplits) return;
+    u32 *buffer = nullptr;
+    u32 size = 0, offset = 0;
+    GPUCMD_GetBuffer(&buffer, &size, &offset);
+    gxCmdQueue_s &queue = __C3D_Context;
+    if (offset < kSplitWords || queue.numEntries + 8u > queue.maxEntries) return;
+    if (arena_used_ > flushed_vertex_) GSPGPU_FlushDataCache(arena_ + flushed_vertex_, arena_used_ - flushed_vertex_);
+    if (index_used_ > flushed_index_) GSPGPU_FlushDataCache(arena_ + kVertexBytes + flushed_index_, index_used_ - flushed_index_);
+    flushed_vertex_ = arena_used_;
+    flushed_index_ = index_used_;
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    gxCmdQueueRun(&queue); // no-op while it runs: later entries are taken from its interrupt
+    ++splits_;
+    ++gpu_stats_.frame_splits;
 }
 
 void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &regs, ge::Prim prim, std::uint32_t count,
@@ -1461,9 +1494,11 @@ std::string GpuRenderer::target_text() const {
     return text;
 }
 
-void GpuRenderer::start_trace(const char *path, unsigned presents) {
+void GpuRenderer::start_trace(const char *path, unsigned presents, std::uint64_t picture) {
     if (draw_trace_ != nullptr || presents == 0u) return;
-    draw_trace_ = std::fopen(path, "w");
+    draw_trace_ = std::fopen(path, "a"); // P3P3DS: several traces per run (main.cpp removes the file first)
+    if (draw_trace_ == nullptr) return;
+    std::fprintf(draw_trace_, "trace at picture %llu\n", static_cast<unsigned long long>(picture));
     draw_trace_left_ = presents;
 }
 
