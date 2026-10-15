@@ -75,8 +75,29 @@ public:
             if (type != 9u && type != 6u && length <= kInBytes) { // not AUD / SEI
                 std::memcpy(in_, au + i, length);
                 GSPGPU_FlushDataCache(in_, length);
-                const Result r = mvdstdProcessVideoFrame(in_, length, 0, nullptr);
-                if (!MVD_CHECKNALUPROC_SUCCESS(r)) { note_error("process", r); return false; }
+                if (length > max_nal_) max_nal_ = static_cast<std::uint32_t>(length);
+                // P3P3DS: a unit the decoder did not take whole (INCOMPLETEPROCESSING, `remaining_size` bytes
+                // left) is handed in again from where it stopped. Measured on the New 3DS (docs/CURRENT_STATE.md
+                // 2026-10-14): the opening's first picture (the 12,936-byte IDR slice) came back with all of
+                // it left; skipping it left the following pictures without a reference until the next
+                // keyframe (the washed-out start).
+                std::size_t left = length;
+                for (int attempt = 0;; ++attempt) {
+                    MVDSTD_ProcessNALUnitOut out{};
+                    const Result r = mvdstdProcessVideoFrame(in_, left, 0, &out);
+                    if (!MVD_CHECKNALUPROC_SUCCESS(r)) { note_error("process", r); return false; }
+                    if (r != MVD_STATUS_INCOMPLETEPROCESSING) {
+                        if (attempt != 0) ++resent_ok_;
+                        break;
+                    }
+                    if (incomplete_++ == 0u) first_incomplete_ = decoded_;
+                    if (out.remaining_size > max_remaining_) max_remaining_ = out.remaining_size;
+                    if (out.remaining_size == 0u || out.remaining_size > left || attempt >= 7) break;
+                    if (out.remaining_size < left) std::memmove(in_, in_ + (left - out.remaining_size), out.remaining_size);
+                    left = out.remaining_size;
+                    GSPGPU_FlushDataCache(in_, left);
+                    ++resent_;
+                }
                 if (type == 1u || type == 5u) slice = true;
             }
             i = next;
@@ -102,14 +123,18 @@ public:
         }
         conv_ticks_ += svcGetSystemTick() - conv_start;
         ++timed_;
+        ++decoded_;
         return true;
     }
     [[nodiscard]] bool ready() const noexcept { return ready_; }
     [[nodiscard]] std::string status() const override {
         if (timed_ == 0u) return status_;
-        char text[64]; // per picture: MVD process + render (includes waiting for the decoder), RGB565 -> 8888 table
+        char text[160]; // per picture: MVD process + render (includes waiting for the decoder), RGB565 -> 8888 table
         const double ms = 1000.0 / static_cast<double>(SYSCLOCK_ARM11) / static_cast<double>(timed_);
-        std::snprintf(text, sizeof text, "; hw %.2f conv %.2f ms", static_cast<double>(hw_ticks_) * ms, static_cast<double>(conv_ticks_) * ms);
+        std::snprintf(text, sizeof text, "; hw %.2f conv %.2f ms; nal max %lu B, incomplete %lu (first pic %lu, left max %lu B), resent %lu ok %lu",
+                      static_cast<double>(hw_ticks_) * ms, static_cast<double>(conv_ticks_) * ms, static_cast<unsigned long>(max_nal_),
+                      static_cast<unsigned long>(incomplete_), static_cast<unsigned long>(first_incomplete_),
+                      static_cast<unsigned long>(max_remaining_), static_cast<unsigned long>(resent_), static_cast<unsigned long>(resent_ok_));
         return status_ + text;
     }
 
@@ -132,6 +157,7 @@ private:
     std::vector<std::uint32_t> lut_;
     u64 hw_ticks_{}, conv_ticks_{};
     std::uint64_t timed_{};
+    std::uint32_t max_nal_{}, incomplete_{}, first_incomplete_{}, max_remaining_{}, decoded_{}, resent_{}, resent_ok_{}; // P3P3DS
 };
 
 // Persona3DS: make_room frees linear memory (the GPU renderer's unused textures) and is called once when

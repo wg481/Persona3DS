@@ -59,11 +59,16 @@ public:
         ring_.assign(static_cast<std::size_t>(kRingFrames) * 2u, 0);
         ready_ = true;
     }
-    ~NdspOutput() {
+    ~NdspOutput() { shutdown(); }
+    // P3P3DS: also called by main() before gfxExit, so the DSP is released in a known order at exit
+    // (the object is a function-local static, otherwise destroyed after main returns).
+    void shutdown() {
         if (!ready_) return;
+        ready_ = false;
         ndspChnWaveBufClear(0);
         ndspExit();
         linearFree(pcm_);
+        pcm_ = nullptr;
     }
     NdspOutput(const NdspOutput &) = delete;
     NdspOutput &operator=(const NdspOutput &) = delete;

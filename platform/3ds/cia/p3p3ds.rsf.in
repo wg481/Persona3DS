@@ -24,8 +24,12 @@ Option:
 AccessControlInfo:
   CoreVersion                   : 2
   DescVersion                   : 2
+  # P3P3DS: kernel 2.44 (firmware 8.0): the linear heap at 0x30000000 (libctru os.h OS_FCRAM_VADDR; older
+  # versions get the old mapping at 0x14000000). With "33" the New 3DS mvd module crashed reading the app's
+  # input buffer at its old-mapping address (Luma3DS dump: process mvd, data abort, far 0x14553c00);
+  # Luma3DS's 3dsx loader gives homebrew 8.0 (sysmodules/loader/source/hbldr.c, 0xFC00022C).
   ReleaseKernelMajor            : "02"
-  ReleaseKernelMinor            : "33"
+  ReleaseKernelMinor            : "44"
   UseExtSaveData                : false
   FileSystemAccess:
    - DirectSdmc

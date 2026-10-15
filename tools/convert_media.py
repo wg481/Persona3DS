@@ -172,9 +172,12 @@ def write_frame_index(path: Path, width: int, height: int, aus: list[tuple[int, 
 def run_ffmpeg_video(ffmpeg: str, src: Path, dst: Path) -> None:
     # Baseline (no B-frames: one access unit per picture in display order), level 3.0 for the
     # New 3DS decoder, an access unit delimiter before every picture, one slice per picture.
+    # P3P3DS: one reference picture (ref=1; preset medium uses 3). The New 3DS showed the start of the
+    # opening washed out until a scene change while the same .h264 plays correctly in ffplay
+    # (docs/CURRENT_STATE.md 2026-10-14): [INFERRED] the decoder mispredicts from older references.
     subprocess.run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src), "-an",
                     "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-bf", "0", "-pix_fmt", "yuv420p",
-                    "-preset", "medium", "-crf", "21", "-x264-params", "aud=1:slices=1:sliced-threads=0",
+                    "-preset", "medium", "-crf", "21", "-x264-params", "aud=1:slices=1:sliced-threads=0:ref=1",
                     "-fps_mode", "passthrough", "-f", "h264", str(dst)], check=True)
 
 
