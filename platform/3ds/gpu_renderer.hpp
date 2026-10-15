@@ -56,6 +56,10 @@ struct GpuStats {
     std::uint64_t command_words{}, counted_draws{}, command_flushes{}, arena_flushes{};
     std::uint64_t model_batches{}; // GPU draws that model draws were merged into
     std::uint64_t fast_draws{};    // model draws that joined a batch on the fast path
+    // P3P3DS: sampled (1 in 16) model draws that joined the batch off the fast path: per opcode that
+    // moved state_version since the previous PRIM (join_cause), or with state_version unchanged (join_other).
+    std::array<std::uint32_t, 256> join_cause{};
+    std::uint32_t join_slow{}, join_other{};
     std::uint64_t model_runs{};    // vertex blocks filled for runs of contiguous model draws
     std::uint64_t run_draws{};     // model draws that went into such a run
     std::uint32_t textures{}, targets{};

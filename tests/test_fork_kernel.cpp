@@ -733,8 +733,8 @@ void test_ge_marked_state_through_queue() {
 }
 
 // P3P3DS: state_version (the 3DS renderer's fast path) moves only when the render state changes:
-// registers, matrices and palettes rewritten with the values they hold leave it; a changed value,
-// a new palette and TEXFLUSH/TRXKICK move it; the matrices still reach the renderer.
+// registers, matrices and palettes rewritten with the values they hold, the CLUT address and matrix
+// selects and TEXFLUSH leave it; a changed value and a new palette move it; the matrices still reach the renderer.
 void test_ge_state_version_on_change() {
     struct Versions final : p3p3ds::ge::GeRenderer {
         std::vector<std::uint64_t> v;
@@ -754,8 +754,8 @@ void test_ge_state_version_on_change() {
     Versions *seen = rec.get();
     kernel.ge().set_renderer(std::move(rec));
     auto &m = rt.memory();
-    constexpr std::uint32_t kList = 0x08A40000u, kVerts = 0x08B00000u, kPal = 0x08B80000u, kPal2 = 0x08B81000u;
-    for (std::uint32_t k = 0; k < 16u; ++k) { m.store32(kPal + 4u * k, 0x1000u + k); m.store32(kPal2 + 4u * k, 0x2000u + k); }
+    constexpr std::uint32_t kList = 0x08A40000u, kVerts = 0x08B00000u, kPal = 0x08B80000u, kPal2 = 0x08B81000u, kPal3 = 0x08B82000u;
+    for (std::uint32_t k = 0; k < 16u; ++k) { m.store32(kPal + 4u * k, 0x1000u + k); m.store32(kPal2 + 4u * k, 0x2000u + k); m.store32(kPal3 + 4u * k, 0x2000u + k); }
     std::uint32_t pc = kList;
     const auto put = [&](std::uint32_t w) { m.store32(pc, w); pc += 4u; };
     const auto draw = [&] { put(0x10000000u | ((kVerts >> 8) & 0x0F0000u)); put(0x01000000u | (kVerts & 0xFFFFFFu)); put(0x04030003u); };
@@ -768,17 +768,20 @@ void test_ge_state_version_on_change() {
     put(0x21000000u); draw();                                     // 2: register changed
     world(0x400000u); draw();                                     // 3: matrix changed
     palette(kPal2); draw();                                       // 4: palette changed
-    put(0xCB000000u); draw();                                     // 5: TEXFLUSH
+    put(0xCB000000u); draw();                                     // 5: TEXFLUSH (no renderer state)
+    palette(kPal3); put(0x3C000000u); draw();                     // 6: same palette elsewhere, a matrix select
     put(0x0F000000u); put(0x0C000000u);
     rt.cpu().set_gpr(4, kList); rt.cpu().set_gpr(5, pc); rt.cpu().set_gpr(6, 0xFFFFFFFFu); rt.cpu().set_gpr(7, 0u);
     rt.invoke_import("sceGe_user", 0xAB49E76Au, rt.cpu());
     rt.cpu().set_gpr(4, 0u);
     rt.invoke_import("sceGe_user", 0xB287BD61u, rt.cpu()); // sceGeDrawSync
     CHECK(!rt.stopped());
-    CHECK(seen->v.size() == 6u);
-    if (seen->v.size() == 6u) {
+    CHECK(seen->v.size() == 7u);
+    if (seen->v.size() == 7u) {
         CHECK(seen->v[1] == seen->v[0]);
-        for (int i = 2; i < 6; ++i) CHECK(seen->v[i] != seen->v[i - 1]);
+        for (int i = 2; i < 5; ++i) CHECK(seen->v[i] != seen->v[i - 1]);
+        CHECK(seen->v[5] == seen->v[4]);
+        CHECK(seen->v[6] == seen->v[5]);
         CHECK(seen->world0[2] == 1.0f && seen->world0[3] == 2.0f);
     }
 }

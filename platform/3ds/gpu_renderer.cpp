@@ -892,6 +892,12 @@ void GpuRenderer::draw(psprecomp::GuestMemory &memory, const ge::GeRegisters &re
             flush_frame();
         }
         const bool join = batch_active_ && sig_ == batch_sig_;
+        if (timed_ && join) { // P3P3DS: why this draw missed the fast path (report `join:`)
+            ++gpu_stats_.join_slow;
+            if (regs.state_version == fast_version_) ++gpu_stats_.join_other;
+            else for (std::uint32_t k = 0; k < 8u; ++k)
+                for (std::uint32_t bits = regs.changed_ops[k]; bits != 0u; bits &= bits - 1u) ++gpu_stats_.join_cause[k * 32u + static_cast<std::uint32_t>(__builtin_ctz(bits))];
+        }
         const u64 flush_start = tick();
         add(gpu_stats_.prep_sig_ticks, sig_start, flush_start);
         u64 state_start = flush_start;

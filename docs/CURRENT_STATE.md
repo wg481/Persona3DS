@@ -2,6 +2,27 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Batch fast path working in the dungeon: core 2 prep 23.7 -> 14.3 % (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `1dd34465` (header now right), same school-dungeon walk: `merge 738k>285k f453k` (every one of the 453k joined draws took the fast path), `join   : slow 0 other 0`; last 10 s `draw: prep 14.3` (23.7 on `34d6ec67`) = `target 0.5 tex 3.4 sig 2.3 flush 3.9 state 0.6`; `gpu thd: busy 58 wait 7.1` (65 / 11.6); run average speed 105 % (98 %). Fast path, `join` counter and the TEXFLUSH/CLUT-address/non-render-register changes of the two entries below confirmed.
+- [VERIFIED] CSV dungeon rows 37-76: speed 87-102 %, mostly 98-101 % (72-103 % on `d6b90214`); `gpu_prep_pct` 9-22 (13-33). Remaining dips (87-92 %, rows 56, 61, 70, 71) are the heaviest views, 31-33k draws/s: core 2 76-81 % busy (about 25 us per draw, about 28 before) and the main core at `idle 0` (`aot 66-70`) with `sceGe_user_B287BD61` (sceGeDrawSync) 10-12 % of the second, so both cores are near their limit there.
+- Next candidates on core 2: `flush` (previous batch's submit, 3.9), `tex` of the draws that start a batch (3.4), vertices/uniforms/submit (`vtx 4.5 unif 4.9 sub 2.4`); on the main core, game code (`aot`).
+
+## Fast path blocked by TEXFLUSH before every draw (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on `d6b90214` (report header said `build 6661ef9f`: the id is taken at configure time and `make` did not reconfigure), school dungeon: `join   : slow 26453 other 0 CB:100%`, `merge 687k>264k f0k`, `prep: target 1.0 tex 3.8 sig 7.1 flush 3.4 state 0.5`, `gpu thd: busy 61`; CSV dungeon rows 33-70 speed 72-103 %. Every sampled join off the fast path had TEXFLUSH (`0xCB`) since the previous PRIM, and only it: the CLUT address change was not the blocker, or not alone.
+- [VERIFIED] no renderer acts on TEXFLUSH/TEXSYNC: no `0xCB`/`0xCC` in `core/src/ge` or `platform/3ds/gpu_renderer.cpp`. The 3DS texture cache checks a texture's contents at most once per frame (`bind_texture`, `checked_frame == frame_` is a hit), and the fast path joins only draws of the same frame with unchanged state, so skipping `bind_texture` there returns what it would have.
+- Change (`core/src/hle/ge.cpp`): TEXFLUSH and TEXSYNC no longer move `state_version`; `test_ge_state_version_on_change` expects that. `platform/3ds/CMakeLists.txt`: configure depends on `.git/logs/HEAD`, so `make` after a checkout, pull or commit reconfigures and the report's `build` id names the commit built.
+- [UNVERIFIED] expected: `f` near the joined count, `prep` `tex` and `sig` down on those draws, `join` line near 0 `slow`.
+
+## Fast path still unused: CLUT address and other non-render registers; cause counter (2026-10-14)
+
+- [VERIFIED] Maintainer's New 3DS on master `6661ef9f` (same-value writes no longer counted), school dungeon: report `merge 567k>218k f0k`, `prep: target 1.3 tex 4.2 sig 7.9 flush 3.7 state 0.6`, `gpu thd: busy 64`; CSV dungeon rows 32-62 speed 91-103 %, `gpu_busy_pct` 45-81. The fast path is still never taken, so a register outside the batch signature changes between joined draws.
+- [WRONG] that same-value rewrites alone kept the joined draws off the fast path (entry below).
+- [INFERRED] candidates: the CLUT address (`0xB0`/`0xB1`; Persona loads a palette for about every draw, and only the palette's contents reach the renderer), the transfer registers, the matrix selects and BBOX. None of them is read by a renderer outside TRXKICK (`software_renderer.cpp` transfer, `gpu_renderer.cpp` transfer).
+- Change (`core/src/hle/ge.cpp`): those commands (`0x07`, `0x2A`, `0x3A`, `0x3C`, `0x3E`, `0x40`, `0xB0`-`0xB5`, `0xEB`, `0xEC`, `0xEE`) no longer move `state_version`. Diagnostic: `GeRegisters::changed_ops` holds the opcodes that moved it since the previous PRIM; the 3DS renderer counts, for 1 in 16 model draws that join the batch off the fast path, each such opcode. Report line `join   : slow N other M OP:P% ...` (`other`: version unchanged, another fast-path condition failed; `OP:P%`: top 6 opcodes, share of the sampled joins). `test_ge_state_version_on_change` covers the CLUT address and a matrix select.
+- [UNVERIFIED] whether this alone opens the fast path; if `f` stays low, the `join` line names the opcode to look at next.
+
 ## Core 2: redundant GE writes no longer leave the batch fast path (2026-10-14)
 
 - [VERIFIED] Prep split on the maintainer's New 3DS, `34d6ec67`, school dungeon (last 10 s, % of core 2's time): `draw: prep 23.7` = `target 1.2 tex 4.3 sig 8.4 flush 3.8 state 0.7`; `gpu thd: busy 65`. Report `merge 777k>292k f0k`: 62 % of the model draws joined the pending batch (their signature equalled it), yet none took the fast path, so every one of them still paid the texture lookup and the about 160-word signature build and compare.
