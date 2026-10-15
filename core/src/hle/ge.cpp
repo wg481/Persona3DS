@@ -232,12 +232,25 @@ void GeManager::count_features(std::uint32_t prim_type) {
 void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t word) {
     const auto op=word>>24, arg=word&0xFFFFFF;
     auto &mem=rt.memory();
-    regs_.reg[op]=arg;
-    regs_.mark(op); regs_.dirty_tracked=true; // P3P3DS: AsyncRenderer sends written words only
+    const auto old=regs_.reg[op]; // P3P3DS: state_version moves only when the render state changes
+    // P3P3DS: matrix data words go to the matrices only (no renderer reads their register copy), so a
+    // matrix rewritten with its values leaves the register copy too unchanged.
+    const bool matrix_data=op==0x2B || op==0x3B || op==0x3D || op==0x3F || op==0x41;
+    if(!matrix_data) { regs_.reg[op]=arg; regs_.mark(op); }
+    regs_.dirty_tracked=true; // P3P3DS: AsyncRenderer sends written words only
+    // P3P3DS: Persona's dungeon rewrites registers, matrices and palettes with the values they already
+    // hold between draws, so every draw left the renderer's fast path (report `merge ... f0k`) and
+    // rebuilt its batch signature on core 2 although 62 % of the draws then joined the batch
+    // (docs/CURRENT_STATE.md). A write of the value a register already holds no longer counts.
+    auto bump_if=[&](bool changed){ if(changed) ++regs_.state_version; };
+    auto set_float=[&](float &f){ const float v=ge::ge_float(arg); bump_if(std::bit_cast<std::uint32_t>(f)!=std::bit_cast<std::uint32_t>(v)); f=v; };
     switch(op) { // list control, VADDR, IADDR, PRIM, BASE, OFFSET, ORIGIN leave the render state
     case 0x00: case 0x01: case 0x02: case 0x04: case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C:
     case 0x0E: case 0x0F: case 0x10: case 0x13: case 0x14: break;
-    default: ++regs_.state_version; break;
+    case 0x2B: case 0x3B: case 0x3D: case 0x3F: case 0x41: break; // P3P3DS: matrix data: below
+    case 0xC4: bump_if(old!=arg); break; // P3P3DS: and below when the palette changes
+    case 0xCB: case 0xCC: case 0xEA: ++regs_.state_version; break; // P3P3DS: TEXFLUSH, TEXSYNC, TRXKICK act beyond the register
+    default: bump_if(old!=arg); break;
     }
     state_.registers[op]=arg;
     auto target=[&](std::uint32_t a){ return state_.relative(a)&~3u; };
@@ -282,15 +295,15 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
     case 0x13: state_.offset=arg<<8; break;
     case 0x14: state_.offset=l.pc; break; // ORIGIN
     case 0x2A: regs_.reg[0x2A]=arg; state_.matrix_index[0]=arg&0x7F; break;
-    case 0x2B: { auto &i=state_.matrix_index[0]; if(i<regs_.bone.size()) { regs_.bone[i]=ge::ge_float(arg); regs_.mark(ge::GeRegisters::kWordBone+i); } ++i; break; } // P3P3DS: mark
+    case 0x2B: { auto &i=state_.matrix_index[0]; if(i<regs_.bone.size()) { set_float(regs_.bone[i]); regs_.mark(ge::GeRegisters::kWordBone+i); } ++i; break; } // P3P3DS: mark
     case 0x3A: state_.matrix_index[1]=arg&0xF; break;
-    case 0x3B: { auto &i=state_.matrix_index[1]; if(i<12) { regs_.world[i]=ge::ge_float(arg); regs_.mark(ge::GeRegisters::kWordWorld+i); } ++i; break; } // P3P3DS: mark
+    case 0x3B: { auto &i=state_.matrix_index[1]; if(i<12) { set_float(regs_.world[i]); regs_.mark(ge::GeRegisters::kWordWorld+i); } ++i; break; } // P3P3DS: mark
     case 0x3C: state_.matrix_index[2]=arg&0xF; break;
-    case 0x3D: { auto &i=state_.matrix_index[2]; if(i<12) { regs_.view[i]=ge::ge_float(arg); regs_.mark(ge::GeRegisters::kWordView+i); } ++i; break; } // P3P3DS: mark
+    case 0x3D: { auto &i=state_.matrix_index[2]; if(i<12) { set_float(regs_.view[i]); regs_.mark(ge::GeRegisters::kWordView+i); } ++i; break; } // P3P3DS: mark
     case 0x3E: state_.matrix_index[3]=arg&0xF; break;
-    case 0x3F: { auto &i=state_.matrix_index[3]; if(i<16) { regs_.proj[i]=ge::ge_float(arg); regs_.mark(ge::GeRegisters::kWordProj+i); } ++i; break; } // P3P3DS: mark
+    case 0x3F: { auto &i=state_.matrix_index[3]; if(i<16) { set_float(regs_.proj[i]); regs_.mark(ge::GeRegisters::kWordProj+i); } ++i; break; } // P3P3DS: mark
     case 0x40: state_.matrix_index[4]=arg&0xF; break;
-    case 0x41: { auto &i=state_.matrix_index[4]; if(i<12) { regs_.tgen[i]=ge::ge_float(arg); regs_.mark(ge::GeRegisters::kWordTgen+i); } ++i; break; } // P3P3DS: mark
+    case 0x41: { auto &i=state_.matrix_index[4]; if(i<12) { set_float(regs_.tgen[i]); regs_.mark(ge::GeRegisters::kWordTgen+i); } ++i; break; } // P3P3DS: mark
     case 0xC4: { // LOADCLUT: arg blocks of 32 bytes from CLUTADDR (+ upper bits)
         const auto address=(regs_.reg[0xB0]&0xFFFFF0u)|((regs_.reg[0xB1]&0x0F0000u)<<8);
         const auto bytes=std::min<std::uint32_t>((arg&0x3F)*32u,1024u);
@@ -312,6 +325,7 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
         std::uint64_t h=0x84222325CBF29CE4ull^regs_.clut_words;
         for(std::uint32_t i=0;i<regs_.clut_words;++i) h=(h^regs_.clut[i])*0x100000001B3ull;
         regs_.clut_hash=h;
+        ++regs_.state_version; // P3P3DS: a new palette (the same one returns above)
         break;
     }
     case 0xEA: {
