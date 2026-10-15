@@ -242,14 +242,19 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
     // hold between draws, so every draw left the renderer's fast path (report `merge ... f0k`) and
     // rebuilt its batch signature on core 2 although 62 % of the draws then joined the batch
     // (docs/CURRENT_STATE.md). A write of the value a register already holds no longer counts.
-    auto bump_if=[&](bool changed){ if(changed) ++regs_.state_version; };
+    // P3P3DS: the CLUT address (the palette counts through LOADCLUT), the transfer registers (TRXKICK
+    // counts), the matrix selects and BBOX feed no renderer state: they never move state_version.
+    auto bump=[&]{ ++regs_.state_version; regs_.changed_ops[op>>5]|=1u<<(op&31u); };
+    auto bump_if=[&](bool changed){ if(changed) bump(); };
     auto set_float=[&](float &f){ const float v=ge::ge_float(arg); bump_if(std::bit_cast<std::uint32_t>(f)!=std::bit_cast<std::uint32_t>(v)); f=v; };
     switch(op) { // list control, VADDR, IADDR, PRIM, BASE, OFFSET, ORIGIN leave the render state
     case 0x00: case 0x01: case 0x02: case 0x04: case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C:
     case 0x0E: case 0x0F: case 0x10: case 0x13: case 0x14: break;
     case 0x2B: case 0x3B: case 0x3D: case 0x3F: case 0x41: break; // P3P3DS: matrix data: below
+    case 0x07: case 0x2A: case 0x3A: case 0x3C: case 0x3E: case 0x40:
+    case 0xB0: case 0xB1: case 0xB2: case 0xB3: case 0xB4: case 0xB5: case 0xEB: case 0xEC: case 0xEE: break; // P3P3DS: see bump
     case 0xC4: bump_if(old!=arg); break; // P3P3DS: and below when the palette changes
-    case 0xCB: case 0xCC: case 0xEA: ++regs_.state_version; break; // P3P3DS: TEXFLUSH, TEXSYNC, TRXKICK act beyond the register
+    case 0xCB: case 0xCC: case 0xEA: bump(); break; // P3P3DS: TEXFLUSH, TEXSYNC, TRXKICK act beyond the register
     default: bump_if(old!=arg); break;
     }
     state_.registers[op]=arg;
@@ -266,6 +271,7 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
         const SampledProfileScope timer(host_profile().render_ns, host_profile().render_calls); // thousands per frame: sampled
         if(!skip_rasterization) active_->draw(mem,regs_,static_cast<ge::Prim>(type),count,state_.vertex,state_.index); // P3P3DS: active_
         }
+        regs_.changed_ops.fill(0u); // P3P3DS: fast-path diagnostic
         if(draw_log) log_draw(mem,type,count);
         const auto layout=ge::vertex_layout(regs_.reg[0x12]);
         if(layout.index_format) state_.index+=count*(layout.index_format==1?1u:2u);
@@ -325,7 +331,7 @@ void GeManager::execute(psprecomp::Runtime &rt, GeListInfo &l, std::uint32_t wor
         std::uint64_t h=0x84222325CBF29CE4ull^regs_.clut_words;
         for(std::uint32_t i=0;i<regs_.clut_words;++i) h=(h^regs_.clut[i])*0x100000001B3ull;
         regs_.clut_hash=h;
-        ++regs_.state_version; // P3P3DS: a new palette (the same one returns above)
+        bump(); // P3P3DS: a new palette (the same one returns above)
         break;
     }
     case 0xEA: {

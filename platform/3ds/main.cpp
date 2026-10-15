@@ -495,8 +495,21 @@ std::string gpu_text() {
                   static_cast<unsigned long long>(c.hits / 1000u), static_cast<unsigned long long>(c.misses / 1000u),
                   static_cast<unsigned long long>(c.volatile_skips / 1000u), static_cast<unsigned long long>(c.full / 1000u),
                   static_cast<unsigned long long>(g.run_draws / 1000u), static_cast<unsigned long long>(g.model_runs / 1000u));
+    // P3P3DS: sampled joins off the fast path and the opcodes that moved state_version before them
+    // (top 6, % of those joins; a join can have several).
+    std::string join = "join   : slow " + std::to_string(g.join_slow) + " other " + std::to_string(g.join_other);
+    std::array<std::uint32_t, 256> cause = g.join_cause;
+    for (int n = 0; n < 6; ++n) {
+        const auto top = std::max_element(cause.begin(), cause.end());
+        if (*top == 0u) break;
+        char item[24];
+        std::snprintf(item, sizeof item, " %02X:%lu%%", static_cast<unsigned>(top - cause.begin()),
+                      static_cast<unsigned long>(g.join_slow != 0u ? *top * 100ull / g.join_slow : 0u));
+        join += item;
+        *top = 0u;
+    }
     // Persona3DS: per render target "address d<draws> p<presents> c<CPU presents>" (movie flicker evidence).
-    return std::string(buf) + vc + "targets: " + g_gpu->target_text() + "\n";
+    return std::string(buf) + vc + join + "\ntargets: " + g_gpu->target_text() + "\n";
 }
 
 TimeSample time_sample(const Stats &s, std::uint64_t guest_us) {

@@ -29,6 +29,10 @@ struct GeRegisters {
     // vertex/index address, PRIM and list control): a renderer may reuse what
     // it derived for the previous draw while this is unchanged.
     std::uint64_t state_version{};
+    // P3P3DS: commands that moved state_version since the previous PRIM, one bit per opcode (set by
+    // GeManager, cleared after each PRIM; not sent through AsyncRenderer). Report diagnostic of the
+    // 3DS renderer's batch fast path (docs/CURRENT_STATE.md 2026-10-14).
+    std::array<std::uint32_t, 8> changed_ops{};
     // P3P3DS: which 32-bit words were written since AsyncRenderer last sent them to its worker.
     // Word numbering: reg 0..255, then bone, world, view, tgen, proj (kWord* below). GeManager marks
     // every write (dirty_tracked); with dirty_tracked clear (other writers, tests) AsyncRenderer
