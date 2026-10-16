@@ -2,6 +2,11 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## First game-code profile: three functions take half of it (2026-10-15)
+
+- [VERIFIED] Maintainer's New 3DS, profile build `faaa26f3` (`-DP3P_AOT_PROFILE=ON`), 140 s with most of it in the school dungeon: `aot_profile.txt` 139,997 samples, 78,573 in generated code, 61,424 in imports. Top functions (share of generated-code samples): `0884c664` 23.0 % (6,536 bytes, FPU 122, hot block `0884d8e4` 8,811 samples), `089784a0` 16.7 % (88 bytes, 7 loads, 1 store, hot block `089784e0` 10,496), `089649e0` 11.5 % (216 bytes, no loads, 6 stores, 11 branches: a fill loop, hot block `08964a40` 8,465), then `08973f60` 4.4 % (FPU 378), `08805824` 4.1 %; 283 functions sampled. CSV dungeon seconds at 80-90 % have `aot 76-79 idle 0`.
+- [INFERRED] `089649e0` looks like memset (stores only) and `089784a0` like a small search or compare loop; both are candidates for native replacements (`Runtime::register_native_fast_path`, used by upstream's VCS profile). Next evidence: their instructions (`dump_function`).
+
 ## Release bottom screen; game-code sampling profile (measurement build) (2026-10-14)
 
 - Bottom screen (maintainer's choice: short status plus a toggle, release by default): `status_text` (title, disc id, credits, build, fps and speed, START+SELECT and the touch hint), redrawn with the 5 s report; touching the screen switches to the full report (`report_text`) and back (touch is not mapped to the PSP pad); an empty `sdmc:/persona3ds/debug_screen.txt` starts with the full report. `report.txt` on the SD card is unchanged.
