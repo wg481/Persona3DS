@@ -24,6 +24,11 @@
 
 // P3P3DS: cleared by --no-transfer-records (see main).
 bool g_record_transfers = true;
+// P3P3DS: --native-leaf ADDR=KIND. A fixed JAL to ADDR first tries a host routine of that kind
+// and goes on at the return address when it succeeds; otherwise the guest function runs as before.
+// KIND "memset": a0 destination, a1 byte value, a2 length, returns a0 in v0 (GuestMemory::AotFastView::aot_fill).
+std::map<std::uint32_t, std::string> g_native_leaves;
+std::size_t g_native_leaf_sites = 0u;
 
 namespace {
 struct Function {
@@ -1124,6 +1129,19 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                     // after its delay slot, even when the callee cannot chain.
                     if (g_record_transfers) body << "    rt.record_transfer(" << psprecomp::hex32(pc) << "u, "
                          << psprecomp::hex32(decoded.word) << "u, " << psprecomp::hex32(target) << "u);\n";
+                    if (decoded.kind == psprecomp::OpcodeKind::Jal) {
+                        // P3P3DS: --native-leaf (see g_native_leaves). $ra and the delay slot are done.
+                        const auto leaf = g_native_leaves.find(target);
+                        if (leaf != g_native_leaves.end() && leaf->second == "memset") {
+                            ++g_native_leaf_sites;
+                            const std::uint32_t return_pc = pc + 8u;
+                            body << "    if (aot_mem.aot_fill(ctx.gpr[4], static_cast<std::uint8_t>(ctx.gpr[5]), ctx.gpr[6])) { ctx.set_gpr(2, ctx.gpr[4]); ";
+                            if (function.entry_labels.contains(return_pc))
+                                body << "goto L_" << psprecomp::hex32(return_pc).substr(2) << "; }\n";
+                            else
+                                body << "ctx.pc = " << psprecomp::hex32(return_pc) << "u; return; }\n";
+                        }
+                    }
                     if (decoded.kind == psprecomp::OpcodeKind::J) {
                         emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
                     } else if (function.entry_labels.contains(target) &&
@@ -1812,6 +1830,7 @@ int generate_auto(const std::filesystem::path &elf_path,
               << "  source units:      " << units.size() << "\n"
               << "  rewritten units:   " << rewritten_units << "\n"
               << "  import wrappers:   " << imports.size() << "\n"
+              << "  native leaf calls: " << g_native_leaf_sites << " to " << g_native_leaves.size() << " leaves\n" // P3P3DS
               << "  output:            " << output_dir.string() << "\n";
     return 0;
 }
@@ -1826,6 +1845,17 @@ int main(int argc, char **argv) {
             int out = 1;
             for (int i = 1; i < argc; ++i) {
                 if (std::string_view(argv[i]) == "--no-transfer-records") g_record_transfers = false;
+                else if (std::string_view(argv[i]) == "--native-leaf" && i + 1 < argc) {
+                    // P3P3DS: --native-leaf ADDR=KIND (see g_native_leaves).
+                    const std::string spec = argv[++i];
+                    const auto equals = spec.find('=');
+                    const std::string kind = equals == std::string::npos ? std::string{} : spec.substr(equals + 1u);
+                    if (kind != "memset") {
+                        std::cerr << "psp_recomp: --native-leaf expects ADDR=memset, got " << spec << "\n";
+                        return 2;
+                    }
+                    g_native_leaves[static_cast<std::uint32_t>(std::stoul(spec.substr(0u, equals), nullptr, 0))] = kind;
+                }
                 else argv[out++] = argv[i];
             }
             argc = out;

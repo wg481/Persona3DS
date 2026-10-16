@@ -81,6 +81,10 @@ elseif(P3P_AOT_MODE STREQUAL "AUTO")
     if(NOT P3P_AOT_TRANSFER_RECORDS)
         set(P3P_RECOMP_FLAGS "--no-transfer-records")
     endif()
+    # P3P3DS: host routines for guest leaf functions (${P3P_PROFILE_DIR}/config/aot_layout.cmake).
+    foreach(_leaf IN LISTS P3P_AOT_NATIVE_LEAVES)
+        list(APPEND P3P_RECOMP_FLAGS --native-leaf "${_leaf}")
+    endforeach()
     # Community CWCheat codes applied to the EBOOT before generation and load.
     # Optional: without a profile .ini the patch list is empty ("none").
     set(P3P_CWCHEAT_SELECTION "${P3P_PROFILE_DIR}/config/cwcheat_patches.txt")

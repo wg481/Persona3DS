@@ -216,6 +216,28 @@ static void inline_import_switches(psprecomp::Runtime &, psprecomp::AllegrexCont
     ctx.pc = 0x08806000u; // the other thread's continuation
 }
 static void inline_import_redirects(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) { ++inline_import_calls; ctx.pc = 0x08807000u; }
+// P3P3DS: GuestMemory::AotFastView::aot_fill, the host routine behind --native-leaf ADDR=memset.
+static void test_aot_fill() {
+    psprecomp::GuestMemory memory;
+    memory.store32(0x08900000u, 0x11111111u);
+    memory.store32(0x08900010u, 0x22222222u);
+    const auto view = memory.aot_fast_view();
+    require(view.aot_fill(0x08900001u, 0xABu, 0x0Fu), "aot_fill declined a main RAM range");
+    require(memory.load32(0x08900000u) == 0xABABAB11u && memory.load32(0x0890000Cu) == 0xABABABABu &&
+            memory.load32(0x08900010u) == 0x22222222u, "aot_fill wrote the wrong bytes");
+    require(view.aot_fill(0x48900010u, 0x00u, 4u) && memory.load32(0x08900010u) == 0u,
+            "aot_fill missed the uncached RAM mirror");
+    require(view.aot_fill(0x08900010u, 0x5Au, 0u) && memory.load32(0x08900010u) == 0u,
+            "aot_fill wrote for a zero length");
+    const std::uint32_t ram_end = psprecomp::GuestMemory::kPhysicalBase + 32u * 1024u * 1024u;
+    require(view.aot_fill(ram_end - 4u, 0x77u, 4u) && memory.load32(ram_end - 4u) == 0x77777777u,
+            "aot_fill declined the last RAM word");
+    require(!view.aot_fill(ram_end - 4u, 0x00u, 5u) && memory.load32(ram_end - 4u) == 0x77777777u,
+            "aot_fill wrote a range past the end of RAM");
+    require(!view.aot_fill(0x08900000u, 0x00u, 0xFFFFFFFFu), "aot_fill accepted a wrapping length");
+    require(!view.aot_fill(0x04000000u, 0x00u, 16u), "aot_fill took a VRAM range");
+}
+
 static void test_inline_import() {
     psprecomp::set_runtime_thread_identity(4, "main");
     psprecomp::Runtime rt;
@@ -733,6 +755,52 @@ static void test_automatic_cfg_and_codegen() {
 #endif
 }
 
+// P3P3DS: psp_recomp --native-leaf ADDR=memset. A JAL to ADDR tries the host fill first and goes
+// on at its return label; the guest call stays behind it for the declined case.
+static void test_native_leaf_codegen() {
+#ifndef PSPRECOMP_CODEGEN_PATH
+    throw std::runtime_error("PSPRECOMP_CODEGEN_PATH was not provided by CMake");
+#else
+    auto bytes = make_branch_delay_test_elf();
+    const std::uint32_t code[] = {
+        0x0E201004u, // jal   0x08804010
+        0x24060010u, // addiu a2, zero, 16 (delay slot)
+        0x03E00008u, // jr ra
+        0x00000000u, // nop
+        0x03E00008u, // 0x08804010: jr ra (the "memset")
+        0x00801021u, // addu v0, a0, zero
+        0x00000000u,
+    };
+    for (std::size_t i = 0; i < std::size(code); ++i) put32(bytes, 0x80u + i * 4u, code[i]);
+    const auto root = std::filesystem::temp_directory_path() / "psprecomp_native_leaf_test";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    const auto elf_path = root / "native_leaf.elf";
+    const auto generated_dir = root / "generated";
+    { std::ofstream out(elf_path, std::ios::binary); out.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
+    const std::filesystem::path codegen_path = PSPRECOMP_CODEGEN_PATH;
+    const std::string base = shell_quote(codegen_path) + " " + shell_quote(elf_path) +
+        " --auto " + shell_quote(generated_dir) + " 0x08804000 64";
+    require(std::system(shell_command(base + " --native-leaf 0x08804010=memcpy").c_str()) != 0,
+            "psp_recomp accepted an unknown --native-leaf kind");
+    require(std::system(shell_command(base + " --native-leaf 0x08804010=memset").c_str()) == 0,
+            "psp_recomp --native-leaf generation failed");
+    std::string text;
+    {
+        std::ifstream generated(generated_dir / "generated_unit_0000.cpp");
+        text.assign((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
+    }
+    const auto delay = text.find("ctx.gpr[6] = (static_cast<std::uint32_t>(16))");
+    const auto fill = text.find("if (aot_mem.aot_fill(ctx.gpr[4], static_cast<std::uint8_t>(ctx.gpr[5]), ctx.gpr[6])) "
+                                "{ ctx.gpr[2] = (ctx.gpr[4]); goto L_08804008; }");
+    const auto call = text.find("goto L_08804010;", fill == std::string::npos ? 0u : fill);
+    require(fill != std::string::npos, "--native-leaf did not emit the host fill at the JAL");
+    require(delay == std::string::npos || delay < fill, "--native-leaf fill runs before the JAL delay slot");
+    require(call != std::string::npos, "--native-leaf dropped the guest call behind the host fill");
+    std::filesystem::remove_all(root);
+#endif
+}
+
 static void test_automatic_cross_unit_tail_chaining() {
 #ifndef PSPRECOMP_CODEGEN_PATH
     throw std::runtime_error("PSPRECOMP_CODEGEN_PATH was not provided by CMake");
@@ -1043,6 +1111,7 @@ int main() {
     try {
         test_import_return_context_guard();
         test_inline_import();
+        test_aot_fill();
         test_chained_call_context_guard();
         test_nested_direct_chain_context_guard();
 
@@ -1882,6 +1951,7 @@ int main() {
         test_vfpu_branch_cfg_discovery();
         test_automatic_cfg_and_codegen();
         test_automatic_cross_unit_tail_chaining();
+        test_native_leaf_codegen();
         test_materialized_function_pointer_discovery();
         test_manual_cfg_out_of_line_block();
         test_manual_cfg_tail_call_boundary();

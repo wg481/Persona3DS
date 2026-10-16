@@ -132,6 +132,18 @@ public:
             }
             owner_->aot_store32_slow(address, value);
         }
+        // P3P3DS: one host memset for a guest memset routine that codegen was told about
+        // (psp_recomp --native-leaf ADDR=memset). Writes only when the whole range is in main
+        // RAM and no write watch is active; false means nothing was written and the caller
+        // runs the guest routine instead, which keeps VRAM and watched writes on their paths.
+        [[nodiscard]] bool aot_fill(std::uint32_t address, std::uint8_t value, std::uint32_t length) const {
+            if (length == 0u) return true;
+            if (write_watch_enabled_) return false;
+            const std::uint32_t offset = ram_offset_of_fast(address);
+            if (offset > ram_limit8_ || length - 1u > ram_limit8_ - offset) return false;
+            std::memset(ram_data_ + offset, value, length);
+            return true;
+        }
 
     private:
         friend class GuestMemory;
