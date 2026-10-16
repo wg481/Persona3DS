@@ -128,27 +128,42 @@ std::uint64_t profile_clock(const RuntimeProfile &p) noexcept {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
+// P3P3DS: per import slot (invoke_import_cached), the RuntimeProfile::imports entry, so a call
+// does not hash the library name and search the map (element references of an unordered_map
+// stay valid when it grows; nothing erases entries). Main (game) thread only, like the map.
+std::vector<RuntimeProfile::Import *> g_import_profile_slots;
 struct HleTimer {
     std::uint64_t start{};
     std::string_view library;
     std::uint32_t nid;
+    std::uint32_t slot;
     bool on;
-    HleTimer(std::string_view lib, std::uint32_t id) : library(lib), nid(id), on(runtime_profile().enabled) {
+    HleTimer(std::string_view lib, std::uint32_t id, std::uint32_t import_slot = 0xFFFFFFFFu)
+        : library(lib), nid(id), slot(import_slot), on(runtime_profile().enabled) {
         g_aot_profile_in_import = g_aot_profile_in_import + 1u; // P3P3DS: block sampling profile
         if (on) start = profile_clock(runtime_profile());
     }
     ~HleTimer() {
-        g_aot_profile_in_import = g_aot_profile_in_import - 1u; // P3P3DS
-        if (!on) return;
+        if (!on) { g_aot_profile_in_import = g_aot_profile_in_import - 1u; return; }
         auto &p = runtime_profile();
         const std::uint64_t ns = profile_clock(p) - start; // clock units
         p.hle_ns += ns;
         ++p.hle_calls;
-        if (!p.per_import) return;
-        auto &entry = p.imports[std::hash<std::string_view>{}(library) * 31u + nid];
-        if (entry.calls == 0u) { entry.library = std::string(library); entry.nid = nid; }
-        entry.ns += ns;
-        ++entry.calls;
+        if (p.per_import) {
+            RuntimeProfile::Import *entry = slot < g_import_profile_slots.size() ? g_import_profile_slots[slot] : nullptr;
+            if (entry == nullptr || entry->nid != nid) { // a slot of another Runtime's import table
+                entry = &p.imports[std::hash<std::string_view>{}(library) * 31u + nid];
+                if (entry->calls == 0u) { entry->library = std::string(library); entry->nid = nid; }
+                if (slot != 0xFFFFFFFFu) {
+                    if (slot >= g_import_profile_slots.size()) g_import_profile_slots.resize(static_cast<std::size_t>(slot) + 1u, nullptr);
+                    g_import_profile_slots[slot] = entry;
+                }
+            }
+            entry->ns += ns;
+            ++entry->calls;
+        }
+        // P3P3DS: last, so the AOT sampler counts this bookkeeping as import time, not as the caller's block.
+        g_aot_profile_in_import = g_aot_profile_in_import - 1u;
     }
 };
 } // namespace
@@ -1294,7 +1309,7 @@ void Runtime::invoke_import_cached(std::uint32_t slot, std::string_view library,
         import_bindings_[slot] = bound;
     }
 
-    const HleTimer hle_timer(library, nid); // P3P3DS profiling
+    const HleTimer hle_timer(library, nid, slot); // P3P3DS profiling
     if (g_pre_import_hook != nullptr) g_pre_import_hook(*this, ctx, library, nid); // P3P3DS
     const std::uint64_t outer_entry = g_runtime_import_entry_generation; // P3P3DS: nested imports
     g_runtime_import_entry_generation = g_runtime_thread_switch_generation_fast;
