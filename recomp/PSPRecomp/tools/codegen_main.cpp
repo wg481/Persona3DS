@@ -29,6 +29,8 @@ bool g_record_transfers = true;
 // KIND "memset": a0 destination, a1 byte value, a2 length, returns a0 in v0 (GuestMemory::AotFastView::aot_fill).
 std::map<std::uint32_t, std::string> g_native_leaves;
 std::size_t g_native_leaf_sites = 0u;
+// P3P3DS: --gpr-cache (cache_block_gprs).
+bool g_gpr_cache = false;
 
 namespace {
 struct Function {
@@ -1594,6 +1596,212 @@ std::string lower_constant_vfpu_accesses(std::string text) {
     return text;
 }
 
+// P3P3DS: --gpr-cache. Inside each block (an `L_xxxxxxxx:` label up to the next label), guest
+// GPRs live in C++ locals `gN`: loaded at the block start, written back to ctx before every line
+// that leaves the block or may look at ctx (goto, return, calls through rt. or with ctx, ctx
+// methods that read or write GPRs), and reloaded after such a line when the block can go on.
+// Why: guest stores go through std::uint8_t pointers, which may alias AllegrexContext, so without
+// this every `ctx.gpr[N] = ...` is a real store and every use after a guest store a reload.
+// Measured on the hottest Persona block (0x0884D8E4, devkitARM-style -O2 armv6k, qemu-arm):
+// 955 -> 739 executed instructions. Unlike the removed function-wide register caches (see
+// generate_auto), each local lives only in its block's own scope.
+namespace gpr_cache {
+bool identifier_char(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+
+// Guest register indices N of every `ctx.gpr[N]` in the line, in order.
+void gpr_refs(std::string_view line, std::set<std::uint32_t> &out) {
+    constexpr std::string_view needle = "ctx.gpr[";
+    for (std::size_t at = line.find(needle); at != std::string_view::npos; at = line.find(needle, at + 1u)) {
+        std::size_t cursor = at + needle.size();
+        std::uint32_t value = 0u;
+        const std::size_t first = cursor;
+        while (cursor < line.size() && std::isdigit(static_cast<unsigned char>(line[cursor])))
+            value = value * 10u + static_cast<std::uint32_t>(line[cursor++] - '0');
+        if (cursor > first && cursor < line.size() && line[cursor] == ']' && value < 32u) out.insert(value);
+    }
+}
+
+// Registers assigned by `ctx.gpr[N] = ` (not `==`) in the line.
+void gpr_writes(std::string_view line, std::set<std::uint32_t> &out) {
+    constexpr std::string_view needle = "ctx.gpr[";
+    for (std::size_t at = line.find(needle); at != std::string_view::npos; at = line.find(needle, at + 1u)) {
+        std::size_t cursor = at + needle.size();
+        std::uint32_t value = 0u;
+        const std::size_t first = cursor;
+        while (cursor < line.size() && std::isdigit(static_cast<unsigned char>(line[cursor])))
+            value = value * 10u + static_cast<std::uint32_t>(line[cursor++] - '0');
+        if (cursor == first || value >= 32u || line.substr(cursor, 4u) != "] = ") continue;
+        out.insert(value);
+    }
+}
+
+std::string replace_gprs(std::string_view line) {
+    constexpr std::string_view needle = "ctx.gpr[";
+    std::string result;
+    std::size_t copied = 0u;
+    for (std::size_t at = line.find(needle); at != std::string_view::npos; at = line.find(needle, at + 1u)) {
+        std::size_t cursor = at + needle.size();
+        const std::size_t first = cursor;
+        while (cursor < line.size() && std::isdigit(static_cast<unsigned char>(line[cursor]))) ++cursor;
+        if (cursor == first || cursor >= line.size() || line[cursor] != ']') continue;
+        result.append(line.substr(copied, at - copied));
+        result += 'g';
+        result.append(line.substr(first, cursor - first));
+        copied = cursor + 1u;
+    }
+    result.append(line.substr(copied));
+    return result;
+}
+
+bool has_word(std::string_view line, std::string_view word) {
+    for (std::size_t at = line.find(word); at != std::string_view::npos; at = line.find(word, at + 1u)) {
+        const bool left = at == 0u || !identifier_char(line[at - 1u]);
+        const bool right = at + word.size() >= line.size() || !identifier_char(line[at + word.size()]);
+        if (left && right) return true;
+    }
+    return false;
+}
+
+// A line that leaves the block or may read/write GPRs through ctx or the runtime.
+bool is_barrier(std::string_view line) {
+    std::size_t begin = 0u;
+    while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t')) ++begin;
+    const std::string_view trimmed = line.substr(begin);
+    if (trimmed.starts_with("PSPRECOMP_PROFILE_BLOCK(") || trimmed.starts_with("if (rt.frontier_diagnostics)"))
+        return false;
+    if (has_word(trimmed, "goto") || has_word(trimmed, "return") || has_word(trimmed, "throw")) return true;
+    for (std::size_t at = trimmed.find("rt."); at != std::string_view::npos; at = trimmed.find("rt.", at + 1u)) {
+        if (at > 0u && identifier_char(trimmed[at - 1u])) continue;
+        if (trimmed.substr(at, 12u) != "rt.memory().") return true; // guest memory helpers only touch RAM
+    }
+    static constexpr std::string_view kSafeMembers[] = {
+        "gpr[", "fpr[", "fpr_bits(", "set_fpr_bits(", "vfpu", "set_vfpu", "read_vfpu", "write_vfpu",
+        "apply_vfpu", "eat_vfpu", "execute_vfpu", "fpu_", "set_fpu_"};
+    static constexpr std::string_view kSafeFields[] = {"hi", "lo", "pc", "fcr"};
+    for (std::size_t at = trimmed.find("ctx"); at != std::string_view::npos; at = trimmed.find("ctx", at + 1u)) {
+        if (at > 0u && identifier_char(trimmed[at - 1u])) continue;
+        if (at + 3u < trimmed.size() && identifier_char(trimmed[at + 3u])) continue;
+        if (at + 3u >= trimmed.size() || trimmed[at + 3u] != '.') return true; // ctx passed along
+        const std::string_view member = trimmed.substr(at + 4u);
+        bool safe = false;
+        for (const auto prefix : kSafeMembers) safe = safe || member.starts_with(prefix);
+        for (const auto field : kSafeFields)
+            safe = safe || (member.starts_with(field) && (member.size() == field.size() || !identifier_char(member[field.size()])));
+        if (!safe) return true;
+    }
+    return false;
+}
+
+// Ends the block on every path: nothing after it in the block runs.
+bool is_unconditional_exit(std::string_view line) {
+    std::size_t begin = 0u;
+    while (begin < line.size() && (line[begin] == ' ' || line[begin] == '\t')) ++begin;
+    const std::string_view trimmed = line.substr(begin);
+    if (trimmed.starts_with("if ") || trimmed.starts_with("if(") || trimmed.starts_with("{") ||
+        trimmed.find('{') != std::string_view::npos) return false;
+    return trimmed.starts_with("goto ") || trimmed.ends_with("return;");
+}
+
+// Lines this pass can rewrite one by one: each a complete statement or brace line, every
+// `ctx.gpr[` with a literal index and used only by value or with plain `=`. Any other shape keeps
+// the whole block uncached, as it was.
+bool cacheable(const std::vector<std::string_view> &block) {
+    constexpr std::string_view needle = "ctx.gpr[";
+    for (const auto line : block) {
+        std::size_t last = line.size();
+        while (last > 0u && (line[last - 1u] == ' ' || line[last - 1u] == '\t' || line[last - 1u] == '\r')) --last;
+        std::size_t begin = 0u;
+        while (begin < last && (line[begin] == ' ' || line[begin] == '\t')) ++begin;
+        if (begin == last) continue;
+        std::string_view trimmed = line.substr(begin, last - begin);
+        if (const auto comment = trimmed.find("//"); comment != std::string_view::npos) trimmed = trimmed.substr(0u, comment);
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t')) trimmed.remove_suffix(1u);
+        if (trimmed.empty()) continue;
+        const char end = trimmed.back();
+        if (end != ';' && end != '{' && end != '}') return false;
+        for (std::size_t at = line.find(needle); at != std::string_view::npos; at = line.find(needle, at + 1u)) {
+            if (at > 0u && (line[at - 1u] == '&' || identifier_char(line[at - 1u]))) return false;
+            std::size_t cursor = at + needle.size();
+            const std::size_t first = cursor;
+            while (cursor < line.size() && std::isdigit(static_cast<unsigned char>(line[cursor]))) ++cursor;
+            if (cursor == first || cursor >= line.size() || line[cursor] != ']') return false;
+            const std::string_view after = line.substr(cursor + 1u, 4u);
+            if (after.starts_with("++") || after.starts_with("--") || after.starts_with(" ++") || after.starts_with(" --")) return false;
+            if (after.size() >= 3u && after[0] == ' ' && after[2] == '=' && after[1] != '=' && after[1] != '!' &&
+                after[1] != '<' && after[1] != '>') return false; // compound assignment
+            if (after.starts_with(" <<=") || after.starts_with(" >>=")) return false;
+        }
+    }
+    return true;
+}
+
+void flush_block(std::vector<std::string_view> &block, std::string &out) {
+    std::set<std::uint32_t> regs;
+    for (const auto line : block) gpr_refs(line, regs);
+    if (regs.empty() || !cacheable(block)) {
+        for (const auto line : block) { out.append(line); out += '\n'; }
+        block.clear();
+        return;
+    }
+    out += "    {\n";
+    for (const auto reg : regs)
+        out += "    std::uint32_t g" + std::to_string(reg) + " = ctx.gpr[" + std::to_string(reg) + "];\n";
+    std::set<std::uint32_t> written;
+    for (const auto line : block) {
+        if (is_barrier(line)) {
+            for (const auto reg : written)
+                out += "    ctx.gpr[" + std::to_string(reg) + "] = g" + std::to_string(reg) + ";\n";
+            out.append(line);
+            out += '\n';
+            if (!is_unconditional_exit(line))
+                for (const auto reg : regs)
+                    out += "    g" + std::to_string(reg) + " = ctx.gpr[" + std::to_string(reg) + "];\n";
+            continue;
+        }
+        gpr_writes(line, written);
+        out += replace_gprs(line);
+        out += '\n';
+    }
+    out += "    }\n";
+    block.clear();
+}
+
+bool is_label_line(std::string_view line) {
+    return line.size() == 11u && line.starts_with("L_") && line.back() == ':';
+}
+} // namespace gpr_cache
+
+std::string cache_block_gprs(const std::string &text) {
+    std::string out;
+    out.reserve(text.size() + text.size() / 4u);
+    std::vector<std::string_view> block;
+    bool in_block = false;
+    std::size_t begin = 0u;
+    while (begin < text.size()) {
+        std::size_t end = text.find('\n', begin);
+        if (end == std::string::npos) end = text.size();
+        const std::string_view line(text.data() + begin, end - begin);
+        begin = end + 1u;
+        if (gpr_cache::is_label_line(line)) {
+            if (in_block) gpr_cache::flush_block(block, out);
+            out.append(line);
+            out += '\n';
+            in_block = true;
+            continue;
+        }
+        if (in_block && !line.empty() && line.front() != ' ' && line.front() != '\t') {
+            gpr_cache::flush_block(block, out); // `}` closing the function, or anything else at column 0
+            in_block = false;
+        }
+        if (in_block) { block.push_back(line); continue; }
+        out.append(line);
+        out += '\n';
+    }
+    if (in_block) gpr_cache::flush_block(block, out);
+    if (!text.empty() && text.back() != '\n' && !out.empty()) out.pop_back();
+    return out;
+}
+
 bool write_text_if_changed(const std::filesystem::path &path, const std::string &text) {
     if (std::ifstream existing(path, std::ios::binary); existing) {
         const std::string old((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());
@@ -1765,10 +1973,11 @@ int generate_auto(const std::filesystem::path &elf_path,
         // each grew past 2 GB, exhausting system memory during a normal build.
         // This pipeline matches the last configuration observed booting on
         // hardware.
-        out << lower_constant_vfpu_accesses(
+        std::string unit_text = lower_constant_vfpu_accesses(
                 lower_aot_memory_accesses(
                     lower_constant_fpr_accesses(
                         lower_constant_gpr_writes(emit_function_source(generated_unit, memory, generated_unit.name)))));
+        out << (g_gpr_cache ? cache_block_gprs(unit_text) : unit_text); // P3P3DS: --gpr-cache
         out << "void register_generated_unit_" << unit.bucket << "(Runtime &runtime) {\n";
         out << "    runtime.register_generated_unit(" << unit.bucket << "u, "
             << psprecomp::hex32(generated_unit.address) << "u, " << unit_span_bytes
@@ -1845,6 +2054,7 @@ int main(int argc, char **argv) {
             int out = 1;
             for (int i = 1; i < argc; ++i) {
                 if (std::string_view(argv[i]) == "--no-transfer-records") g_record_transfers = false;
+                else if (std::string_view(argv[i]) == "--gpr-cache") g_gpr_cache = true; // P3P3DS
                 else if (std::string_view(argv[i]) == "--native-leaf" && i + 1 < argc) {
                     // P3P3DS: --native-leaf ADDR=KIND (see g_native_leaves).
                     const std::string spec = argv[++i];

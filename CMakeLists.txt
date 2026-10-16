@@ -85,6 +85,12 @@ elseif(P3P_AOT_MODE STREQUAL "AUTO")
     foreach(_leaf IN LISTS P3P_AOT_NATIVE_LEAVES)
         list(APPEND P3P_RECOMP_FLAGS --native-leaf "${_leaf}")
     endforeach()
+    # P3P3DS: guest registers in C++ locals inside each generated block (psp_recomp --gpr-cache);
+    # on by default for the 3DS build (platform/3ds/CMakeLists.txt), off here unless asked.
+    option(P3P_AOT_GPR_CACHE "Keep guest registers in locals within each generated block" OFF)
+    if(P3P_AOT_GPR_CACHE)
+        list(APPEND P3P_RECOMP_FLAGS --gpr-cache)
+    endif()
     # Community CWCheat codes applied to the EBOOT before generation and load.
     # Optional: without a profile .ini the patch list is empty ("none").
     set(P3P_CWCHEAT_SELECTION "${P3P_PROFILE_DIR}/config/cwcheat_patches.txt")
