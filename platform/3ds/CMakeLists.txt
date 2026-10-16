@@ -95,13 +95,18 @@ foreach(_unit RANGE 0 ${_last})
     list(APPEND AOT_SOURCES "${GEN_DIR}/generated_unit_${_zeros}${_unit}.cpp")
 endforeach()
 # P3P3DS: host routines for guest leaf functions (${P3P_PROFILE_DIR}/config/aot_layout.cmake).
-set(P3P_3DS_NATIVE_LEAF_FLAGS)
+set(P3P_3DS_RECOMP_FLAGS)
 foreach(_leaf IN LISTS P3P_AOT_NATIVE_LEAVES)
-    list(APPEND P3P_3DS_NATIVE_LEAF_FLAGS --native-leaf "${_leaf}")
+    list(APPEND P3P_3DS_RECOMP_FLAGS --native-leaf "${_leaf}")
 endforeach()
+# P3P3DS: guest registers in C++ locals inside each generated block (psp_recomp --gpr-cache).
+option(P3P_AOT_GPR_CACHE "Keep guest registers in locals within each generated block" ON)
+if(P3P_AOT_GPR_CACHE)
+    list(APPEND P3P_3DS_RECOMP_FLAGS --gpr-cache)
+endif()
 add_custom_command(
     OUTPUT ${AOT_SOURCES} "${GEN_DIR}/generated_units.hpp"
-    COMMAND "${P3P_PSP_RECOMP}" "${P3P_ELF}" --auto "${GEN_DIR}" "${P3P_AOT_LOAD_BASE}" "${P3P_AOT_UNIT_SPAN}" "${PATCH_LIST}" --no-transfer-records ${P3P_3DS_NATIVE_LEAF_FLAGS}
+    COMMAND "${P3P_PSP_RECOMP}" "${P3P_ELF}" --auto "${GEN_DIR}" "${P3P_AOT_LOAD_BASE}" "${P3P_AOT_UNIT_SPAN}" "${PATCH_LIST}" --no-transfer-records ${P3P_3DS_RECOMP_FLAGS}
     COMMAND "${Python3_EXECUTABLE}" "${P3P_ROOT}/tools/verify_aot_layout.py" "${GEN_DIR}" "${P3P_AOT_UNIT_COUNT}" "${P3P_AOT_UNIT_SPAN}"
     DEPENDS "${P3P_PSP_RECOMP}" "${P3P_ELF}" "${P3P_PROFILE_DIR}/config/aot_layout.cmake" "${PATCH_LIST}"
     COMMENT "Generating AOT units for 3DS (${P3P_AOT_UNIT_COUNT} x ${P3P_AOT_UNIT_SPAN} bytes)..."

@@ -755,6 +755,43 @@ static void test_automatic_cfg_and_codegen() {
 #endif
 }
 
+// P3P3DS: psp_recomp --gpr-cache. Guest registers live in block locals; the branch condition still
+// reads the register before the delay slot changes it, and the dirty local is written back to ctx
+// before the block leaves.
+static void test_gpr_cache_codegen() {
+#ifndef PSPRECOMP_CODEGEN_PATH
+    throw std::runtime_error("PSPRECOMP_CODEGEN_PATH was not provided by CMake");
+#else
+    const auto bytes = make_branch_delay_test_elf();
+    const auto root = std::filesystem::temp_directory_path() / "psprecomp_gpr_cache_test";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    const auto elf_path = root / "gpr_cache.elf";
+    const auto generated_dir = root / "generated";
+    { std::ofstream out(elf_path, std::ios::binary); out.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size())); }
+    const std::filesystem::path codegen_path = PSPRECOMP_CODEGEN_PATH;
+    const std::string command = shell_quote(codegen_path) + " " + shell_quote(elf_path) +
+        " --auto " + shell_quote(generated_dir) + " 0x08804000 64 --gpr-cache";
+    require(std::system(shell_command(command).c_str()) == 0, "psp_recomp --gpr-cache generation failed");
+    std::string text;
+    {
+        std::ifstream generated(generated_dir / "generated_unit_0000.cpp");
+        text.assign((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
+    }
+    const auto load = text.find("std::uint32_t g8 = ctx.gpr[8];");
+    const auto condition = text.find("const bool branch_taken = g8 == 0u");
+    const auto delay_slot = text.find("g8 = (g8 + static_cast<std::uint32_t>(1))");
+    require(load != std::string::npos && condition != std::string::npos && delay_slot != std::string::npos,
+            "--gpr-cache did not keep $t0 in a block local");
+    require(load < condition && condition < delay_slot, "--gpr-cache lost branch-before-delay-slot semantics");
+    const auto commit = text.find("ctx.gpr[8] = g8;", delay_slot);
+    const auto leave = text.find("goto L_", delay_slot);
+    require(commit != std::string::npos && leave != std::string::npos && commit < leave,
+            "--gpr-cache did not write the dirty local back before leaving the block");
+    std::filesystem::remove_all(root);
+#endif
+}
+
 // P3P3DS: psp_recomp --native-leaf ADDR=memset. A JAL to ADDR tries the host fill first and goes
 // on at its return label; the guest call stays behind it for the declined case.
 static void test_native_leaf_codegen() {
@@ -1952,6 +1989,7 @@ int main() {
         test_automatic_cfg_and_codegen();
         test_automatic_cross_unit_tail_chaining();
         test_native_leaf_codegen();
+        test_gpr_cache_codegen();
         test_materialized_function_pointer_discovery();
         test_manual_cfg_out_of_line_block();
         test_manual_cfg_tail_call_boundary();
