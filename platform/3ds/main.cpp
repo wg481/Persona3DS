@@ -188,6 +188,8 @@ std::string probe_cores() {
 double ticks_to_s(u64 ticks) { return static_cast<double>(ticks) / SYSCLOCK_ARM11; }
 constexpr double kNsPerTick = 1e9 / SYSCLOCK_ARM11;
 std::uint64_t profile_ticks() noexcept { return svcGetSystemTick(); }
+// P3P3DS: measured cost of one profile_ticks() (an SVC), in ns; every HLE call reads it twice.
+double g_tick_read_ns = 0.0;
 
 // Cumulative time counters, sampled once per second; the report shows the
 // split over the last 10 s next to the run average, so slow places show up.
@@ -852,8 +854,8 @@ std::string profile_text(const Stats &s) {
     std::string text = split_text("last 10s", g_samples.front(), g_samples.back(), true);
     text += split_text("run avg ", start, g_samples.back());
     char buf[96];
-    std::snprintf(buf, sizeof buf, "hle    : %llu calls  interp %.1f%%\n", static_cast<unsigned long long>(psprecomp::runtime_profile().hle_calls),
-                  100.0 * ticks_to_s(p3p3ds::host_profile().interpreter_ns) / ticks_to_s(g_samples.back().wall));
+    std::snprintf(buf, sizeof buf, "hle    : %llu calls  interp %.1f%%  tick read %.0f ns\n", static_cast<unsigned long long>(psprecomp::runtime_profile().hle_calls),
+                  100.0 * ticks_to_s(p3p3ds::host_profile().interpreter_ns) / ticks_to_s(g_samples.back().wall), g_tick_read_ns);
     return text + buf + gpu_text();
 }
 
@@ -1298,6 +1300,11 @@ int main() {
         stats.status = "running";
         // Profiling clock: raw system ticks (one SVC, no 64-bit division as in
         // steady_clock), converted to seconds only when the report is built.
+        {   // P3P3DS: cost of the profiling clock itself (report "hle" line).
+            const std::uint64_t t0 = svcGetSystemTick();
+            for (int i = 0; i < 1000; ++i) (void)profile_ticks();
+            g_tick_read_ns = static_cast<double>(svcGetSystemTick() - t0) * kNsPerTick / 1000.0;
+        }
         psprecomp::runtime_profile().clock = profile_ticks;
         psprecomp::runtime_profile().ns_per_unit = kNsPerTick;
         p3p3ds::host_profile().clock = profile_ticks;
