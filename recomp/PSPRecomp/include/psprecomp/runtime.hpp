@@ -52,6 +52,20 @@ extern std::uint64_t g_runtime_thread_switch_generation_fast;
 #define PSPRECOMP_CHAIN_INLINE PSPRECOMP_RUNTIME_FORCEINLINE
 #endif
 
+// P3P3DS: block sampling profile (Persona3DS, docs/CURRENT_STATE.md 2026-10-14). Generated code
+// stores the guest address of every labelled block it enters when PSPRECOMP_AOT_PROFILE is defined
+// (the New 3DS build's P3P_AOT_PROFILE option); a host thread samples the value. Otherwise the macro
+// is empty and the generated code is unchanged in effect.
+extern volatile std::uint32_t g_aot_profile_block;
+// P3P3DS: imports running on the game's thread (nested count), for the same sampler: a sample taken
+// while it is non-zero is HLE time (including waits), not generated code.
+extern volatile std::uint32_t g_aot_profile_in_import;
+#if defined(PSPRECOMP_AOT_PROFILE)
+#define PSPRECOMP_PROFILE_BLOCK(pc) (::psprecomp::g_aot_profile_block = (pc))
+#else
+#define PSPRECOMP_PROFILE_BLOCK(pc) ((void)0)
+#endif
+
 // The cross-unit hot-register cache (AotHotRegisterCache) was removed here.  It
 // kept seven GPRs and six scalar FPRs live in a second object alongside
 // AllegrexContext for the whole duration of a generated unit.  Inside the
@@ -167,6 +181,16 @@ public:
     // Generated profile code can call this API without putting game-specific
     // addresses or implementations in the reusable runtime.
     void register_native_fast_path(std::uint32_t address, NativeFastPath function);
+    // P3P3DS: a fixed JAL/J to a PSP import stub runs the import from generated code (ctx.pc = the stub)
+    // instead of unwinding every native frame to the outer dispatcher, which made every later return of
+    // that call stack go through the dispatcher as well (Persona3DS, 13 % of the New 3DS game core in
+    // the dungeon around sceGeListUpdateStallAddr, docs/CURRENT_STATE.md 2026-10-15). Returns true only
+    // when execution may go on natively at return_pc: the import ran, the PSP thread is unchanged, it
+    // returned there and the scheduler boundary did not preempt. On false ctx.pc is where the outer
+    // dispatcher resumes (the stub itself when the import did not run here). A thread switch inside the
+    // import raises chain_context_invalidated_ so every native ancestor unwinds.
+    [[nodiscard]] bool invoke_import_inline(AllegrexContext &ctx, std::uint32_t return_pc);
+    void set_inline_imports(bool on) noexcept { inline_imports_ = on; }
     void invoke_native_fast_path(std::uint32_t address, AllegrexContext &ctx);
 
     // Bounded cross-unit call chaining.
@@ -370,6 +394,7 @@ private:
     // ownership while native AOT frames may still be nested. Cleared at the
     // beginning of each outer Runtime dispatch.
     bool chain_context_invalidated_{};
+    bool inline_imports_{true}; // P3P3DS: invoke_import_inline
     std::uint64_t dispatches_since_import_{};
     std::uint64_t chained_dispatches_{};
     std::uint64_t dispatch_work_count_{};

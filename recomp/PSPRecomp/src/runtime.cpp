@@ -120,6 +120,8 @@ void set_runtime_pre_import_hook(RuntimePreImportHook hook) noexcept { g_pre_imp
 std::uint64_t runtime_import_entry_generation() noexcept { return g_runtime_import_entry_generation; }
 // P3P3DS: see RuntimeProfile in runtime.hpp.
 RuntimeProfile &runtime_profile() noexcept { static RuntimeProfile profile; return profile; }
+volatile std::uint32_t g_aot_profile_block = 0u; // P3P3DS: PSPRECOMP_PROFILE_BLOCK
+volatile std::uint32_t g_aot_profile_in_import = 0u; // P3P3DS: HleTimer
 namespace {
 std::uint64_t profile_clock(const RuntimeProfile &p) noexcept {
     if (p.clock != nullptr) return p.clock();
@@ -132,9 +134,11 @@ struct HleTimer {
     std::uint32_t nid;
     bool on;
     HleTimer(std::string_view lib, std::uint32_t id) : library(lib), nid(id), on(runtime_profile().enabled) {
+        g_aot_profile_in_import = g_aot_profile_in_import + 1u; // P3P3DS: block sampling profile
         if (on) start = profile_clock(runtime_profile());
     }
     ~HleTimer() {
+        g_aot_profile_in_import = g_aot_profile_in_import - 1u; // P3P3DS
         if (!on) return;
         auto &p = runtime_profile();
         const std::uint64_t ns = profile_clock(p) - start; // clock units
@@ -241,6 +245,23 @@ bool Runtime::account_dispatch_work(AllegrexContext &ctx, bool allow_preemption)
     ++dispatches_since_import_;
     if (!allow_preemption || dispatches_since_import_ < interval) return true;
     return run_starvation_boundary(ctx);
+}
+
+bool Runtime::invoke_import_inline(AllegrexContext &ctx, std::uint32_t return_pc) {
+    if (!inline_imports_ || stopped_ || chain_depth_ >= chain_depth_limit_) return false;
+    const RecompiledFunction function = lookup_function(ctx.pc);
+    if (function == nullptr) return false; // the outer dispatcher (and its fallback) takes the stub
+#if !defined(PSPRECOMP_AOT_PRODUCTION_FASTPATHS)
+    count_pc(ctx.pc);
+#endif
+    const RuntimeExecutionContextToken before = capture_runtime_execution_context();
+    function(*this, ctx); // the import wrapper: HLE, then ctx.pc = $ra when it returned normally
+    if (!runtime_execution_context_matches(before)) {
+        chain_context_invalidated_ = true;
+        return false;
+    }
+    if (stopped_ || ctx.pc != return_pc) return false;
+    return account_dispatch_work(ctx, true);
 }
 
 bool Runtime::invoke_chained_call(AllegrexContext &ctx, GuestMemory::AotFastView *shared_aot_mem) {

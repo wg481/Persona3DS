@@ -94,9 +94,14 @@ foreach(_unit RANGE 0 ${_last})
     string(REPEAT "0" ${_pad} _zeros)
     list(APPEND AOT_SOURCES "${GEN_DIR}/generated_unit_${_zeros}${_unit}.cpp")
 endforeach()
+# P3P3DS: host routines for guest leaf functions (${P3P_PROFILE_DIR}/config/aot_layout.cmake).
+set(P3P_3DS_NATIVE_LEAF_FLAGS)
+foreach(_leaf IN LISTS P3P_AOT_NATIVE_LEAVES)
+    list(APPEND P3P_3DS_NATIVE_LEAF_FLAGS --native-leaf "${_leaf}")
+endforeach()
 add_custom_command(
     OUTPUT ${AOT_SOURCES} "${GEN_DIR}/generated_units.hpp"
-    COMMAND "${P3P_PSP_RECOMP}" "${P3P_ELF}" --auto "${GEN_DIR}" "${P3P_AOT_LOAD_BASE}" "${P3P_AOT_UNIT_SPAN}" "${PATCH_LIST}" --no-transfer-records
+    COMMAND "${P3P_PSP_RECOMP}" "${P3P_ELF}" --auto "${GEN_DIR}" "${P3P_AOT_LOAD_BASE}" "${P3P_AOT_UNIT_SPAN}" "${PATCH_LIST}" --no-transfer-records ${P3P_3DS_NATIVE_LEAF_FLAGS}
     COMMAND "${Python3_EXECUTABLE}" "${P3P_ROOT}/tools/verify_aot_layout.py" "${GEN_DIR}" "${P3P_AOT_UNIT_COUNT}" "${P3P_AOT_UNIT_SPAN}"
     DEPENDS "${P3P_PSP_RECOMP}" "${P3P_ELF}" "${P3P_PROFILE_DIR}/config/aot_layout.cmake" "${PATCH_LIST}"
     COMMENT "Generating AOT units for 3DS (${P3P_AOT_UNIT_COUNT} x ${P3P_AOT_UNIT_SPAN} bytes)..."
@@ -120,6 +125,12 @@ if(P3P_HAVE_GAME)
     target_link_libraries(p3p_aot PUBLIC psprecomp_runtime)
     separate_arguments(_aot_opt NATIVE_COMMAND "${P3P_AOT_OPT}")
     target_compile_options(p3p_aot PRIVATE ${_aot_opt})
+    # P3P3DS: measurement build: generated code records the guest block it enters and the runner samples
+    # it on another core into sdmc:/persona3ds/aot_profile.txt (platform/3ds/main.cpp, AotSampler).
+    option(P3P_AOT_PROFILE "Sample which guest code the game's core runs (aot_profile.txt)" OFF)
+    if(P3P_AOT_PROFILE)
+        target_compile_definitions(p3p_aot PRIVATE PSPRECOMP_AOT_PROFILE)
+    endif()
 endif()
 
 add_library(p3p3ds_core STATIC ${P3P3DS_CORE_SOURCES})
@@ -141,6 +152,9 @@ dkp_add_embedded_binary_library(p3p_ge_shader_bin p3p_ge_shader)
 # shipped prebuilt with the P3P3DS Builder (platform/pc/builder/make_release.py).
 add_library(p3p3ds_objects OBJECT main.cpp gpu_renderer.cpp)
 target_compile_definitions(p3p3ds_objects PRIVATE P3P3DS_BUILD_ID="${P3P_BUILD_ID}")
+if(P3P_AOT_PROFILE)
+    target_compile_definitions(p3p3ds_objects PRIVATE P3P3DS_AOT_PROFILE) # P3P3DS: AotSampler
+endif()
 target_link_libraries(p3p3ds_objects PRIVATE p3p3ds_core p3p_ge_shader_bin citro3d)
 
 if(P3P_HAVE_GAME)

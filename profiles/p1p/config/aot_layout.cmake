@@ -14,3 +14,17 @@
 set(P3P_AOT_LOAD_BASE "0x08804000")
 set(P3P_AOT_UNIT_SPAN "16384")
 set(P3P_AOT_UNIT_COUNT "153")
+
+# Guest leaf functions replaced by a host routine at their fixed JAL call sites
+# (`psp_recomp --native-leaf ADDR=KIND`, recomp/PSPRecomp/tools/codegen_main.cpp).
+# A call still runs the guest function when the host routine declines (range
+# outside main RAM, write watch).
+# 0x089649E0 memset: [VERIFIED] disassembly 0x089649E0-0x08964AB4 (maintainer's
+# hot_dump.txt of the ELF above, 2026-10-15): a0 destination, a1 byte value
+# (`andi a1,0xFF` / `seb`), a2 length; byte loop below 16 bytes, aligned 8-byte
+# `sw` loop at 0x08964A40, tail bytes; returns a0 in v0 (`jr ra; addu v0,a0`).
+# [VERIFIED] AOT profile of build 9180b513: 14.6% of generated-code samples,
+# 6600 of them in the 0x08964A40 loop.
+# [INFERRED] callers use only v0: the routine leaves v1/a1-a3/t0 as scratch
+# (MIPS o32 caller-saved), the host routine sets v0 only.
+set(P3P_AOT_NATIVE_LEAVES "0x089649E0=memset")
