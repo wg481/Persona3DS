@@ -181,6 +181,16 @@ public:
     // Generated profile code can call this API without putting game-specific
     // addresses or implementations in the reusable runtime.
     void register_native_fast_path(std::uint32_t address, NativeFastPath function);
+    // P3P3DS: a fixed JAL/J to a PSP import stub runs the import from generated code (ctx.pc = the stub)
+    // instead of unwinding every native frame to the outer dispatcher, which made every later return of
+    // that call stack go through the dispatcher as well (Persona3DS, 13 % of the New 3DS game core in
+    // the dungeon around sceGeListUpdateStallAddr, docs/CURRENT_STATE.md 2026-10-15). Returns true only
+    // when execution may go on natively at return_pc: the import ran, the PSP thread is unchanged, it
+    // returned there and the scheduler boundary did not preempt. On false ctx.pc is where the outer
+    // dispatcher resumes (the stub itself when the import did not run here). A thread switch inside the
+    // import raises chain_context_invalidated_ so every native ancestor unwinds.
+    [[nodiscard]] bool invoke_import_inline(AllegrexContext &ctx, std::uint32_t return_pc);
+    void set_inline_imports(bool on) noexcept { inline_imports_ = on; }
     void invoke_native_fast_path(std::uint32_t address, AllegrexContext &ctx);
 
     // Bounded cross-unit call chaining.
@@ -384,6 +394,7 @@ private:
     // ownership while native AOT frames may still be nested. Cleared at the
     // beginning of each outer Runtime dispatch.
     bool chain_context_invalidated_{};
+    bool inline_imports_{true}; // P3P3DS: invoke_import_inline
     std::uint64_t dispatches_since_import_{};
     std::uint64_t chained_dispatches_{};
     std::uint64_t dispatch_work_count_{};

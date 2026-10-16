@@ -247,6 +247,23 @@ bool Runtime::account_dispatch_work(AllegrexContext &ctx, bool allow_preemption)
     return run_starvation_boundary(ctx);
 }
 
+bool Runtime::invoke_import_inline(AllegrexContext &ctx, std::uint32_t return_pc) {
+    if (!inline_imports_ || stopped_ || chain_depth_ >= chain_depth_limit_) return false;
+    const RecompiledFunction function = lookup_function(ctx.pc);
+    if (function == nullptr) return false; // the outer dispatcher (and its fallback) takes the stub
+#if !defined(PSPRECOMP_AOT_PRODUCTION_FASTPATHS)
+    count_pc(ctx.pc);
+#endif
+    const RuntimeExecutionContextToken before = capture_runtime_execution_context();
+    function(*this, ctx); // the import wrapper: HLE, then ctx.pc = $ra when it returned normally
+    if (!runtime_execution_context_matches(before)) {
+        chain_context_invalidated_ = true;
+        return false;
+    }
+    if (stopped_ || ctx.pc != return_pc) return false;
+    return account_dispatch_work(ctx, true);
+}
+
 bool Runtime::invoke_chained_call(AllegrexContext &ctx, GuestMemory::AotFastView *shared_aot_mem) {
 #if !defined(PSPRECOMP_AOT_PRODUCTION_FASTPATHS)
     count_pc(ctx.pc);

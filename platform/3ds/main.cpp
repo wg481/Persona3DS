@@ -1200,6 +1200,13 @@ int main() {
         g_gpu = gpu.get();
         // Persona3DS: unchanged textures are re-checked less often (GpuRenderer::set_texture_backoff); an empty
         // sdmc:/persona3ds/tex_check_every_frame.txt checks every texture every frame, as before.
+        // P3P3DS: imports called from generated code run there (Runtime::invoke_import_inline); an empty
+        // sdmc:/persona3ds/no_inline_imports.txt sends them through the outer dispatcher, as before.
+        if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/no_inline_imports.txt", "r")) {
+            rt.set_inline_imports(false);
+            std::fclose(f);
+            stats.cores += ", no inline imports";
+        }
         // P3P3DS: an empty sdmc:/persona3ds/debug_screen.txt starts with the full report on the bottom screen.
         if (FILE *f = std::fopen(P3P_PROFILE_SD_BASE "/debug_screen.txt", "r")) {
             stats.details = true;

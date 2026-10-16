@@ -922,7 +922,9 @@ void emit_target(std::ostringstream &body, std::uint32_t target,
     // CFG/unit (e.g. P3P's tail call `j sceKernelCpuResumeIntr` at 0x08B73E24)
     // was otherwise a `goto` into the stub's `jr ra`, silently skipping the HLE.
     if (import_stubs != nullptr && import_stubs->contains(target)) {
-        body << indent << "ctx.pc = " << psprecomp::hex32(target) << "u; return;\n";
+        // P3P3DS: run the import here (Runtime::invoke_import_inline); a tail jump returns to $ra,
+        // which the native caller frame recognizes, or the outer dispatcher resumes at ctx.pc.
+        body << indent << "ctx.pc = " << psprecomp::hex32(target) << "u; (void)rt.invoke_import_inline(ctx, ctx.gpr[31]); return;\n";
         return;
     }
 
@@ -1140,8 +1142,16 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                         const bool target_is_import = function.import_stubs != nullptr &&
                             function.import_stubs->contains(target);
                         if (target_is_import) {
-                            body << "    ctx.pc = " << psprecomp::hex32(target) << "u;\n"
-                                 << "    return;\n";
+                            // P3P3DS: run the import here and go on locally after it
+                            // (Runtime::invoke_import_inline); otherwise ctx.pc tells the
+                            // outer dispatcher where to resume.
+                            body << "    ctx.pc = " << psprecomp::hex32(target) << "u;\n";
+                            if (function.entry_labels.contains(return_pc))
+                                body << "    if (rt.invoke_import_inline(ctx, " << psprecomp::hex32(return_pc)
+                                     << "u)) goto L_" << psprecomp::hex32(return_pc).substr(2) << ";\n";
+                            else
+                                body << "    (void)rt.invoke_import_inline(ctx, " << psprecomp::hex32(return_pc) << "u);\n";
+                            body << "    return;\n";
                             // P3P3DS: was `continue`, which re-emitted this
                             // instruction forever (pc never advanced) in --auto.
                             break;

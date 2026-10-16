@@ -207,6 +207,44 @@ static void test_import_return_context_guard() {
     psprecomp::set_runtime_thread_identity(-1, "none");
 }
 
+// P3P3DS: Runtime::invoke_import_inline (imports run from generated code).
+static int inline_import_calls = 0;
+static void inline_import_returns(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) { ++inline_import_calls; ctx.pc = ctx.gpr[31]; }
+static void inline_import_switches(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
+    ++inline_import_calls;
+    psprecomp::set_runtime_thread_identity(9, "other");
+    ctx.pc = 0x08806000u; // the other thread's continuation
+}
+static void inline_import_redirects(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) { ++inline_import_calls; ctx.pc = 0x08807000u; }
+static void test_inline_import() {
+    psprecomp::set_runtime_thread_identity(4, "main");
+    psprecomp::Runtime rt;
+    rt.register_function(0x08900000u, &inline_import_returns, "stub_returns");
+    rt.register_function(0x08900008u, &inline_import_switches, "stub_switches");
+    rt.register_function(0x08900010u, &inline_import_redirects, "stub_redirects");
+    psprecomp::AllegrexContext ctx{};
+    inline_import_calls = 0;
+    ctx.gpr[31] = 0x08801008u;
+    ctx.pc = 0x08900000u;
+    require(rt.invoke_import_inline(ctx, 0x08801008u) && ctx.pc == 0x08801008u && inline_import_calls == 1,
+            "Inline import that returned to $ra did not continue natively");
+    ctx.pc = 0x08900010u;
+    require(!rt.invoke_import_inline(ctx, 0x08801008u) && ctx.pc == 0x08807000u && inline_import_calls == 2,
+            "Inline import that redirected the pc continued natively");
+    ctx.pc = 0x08900020u; // nothing registered: left to the outer dispatcher
+    require(!rt.invoke_import_inline(ctx, 0x08801008u) && ctx.pc == 0x08900020u && inline_import_calls == 2,
+            "Unregistered inline import target was not left to the dispatcher");
+    rt.set_inline_imports(false);
+    ctx.pc = 0x08900000u;
+    require(!rt.invoke_import_inline(ctx, 0x08801008u) && ctx.pc == 0x08900000u && inline_import_calls == 2,
+            "Disabled inline imports still ran the import");
+    rt.set_inline_imports(true);
+    ctx.pc = 0x08900008u;
+    require(!rt.invoke_import_inline(ctx, 0x08801008u) && ctx.pc == 0x08806000u && inline_import_calls == 3,
+            "Inline import that switched thread continued natively");
+    psprecomp::set_runtime_thread_identity(-1, "none");
+}
+
 static void put16(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint16_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value);
     bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8u);
@@ -1004,6 +1042,7 @@ static std::vector<std::uint8_t> make_relocation_test_prx() {
 int main() {
     try {
         test_import_return_context_guard();
+        test_inline_import();
         test_chained_call_context_guard();
         test_nested_direct_chain_context_guard();
 
