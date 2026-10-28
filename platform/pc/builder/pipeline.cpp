@@ -1,6 +1,7 @@
 // See pipeline.hpp.
 #include "pipeline.hpp"
 
+#include "media.hpp" // P3P3DS
 #include "psp_eboot.hpp"
 #include "p3p3ds/vfs.hpp"
 
@@ -38,6 +39,8 @@ namespace {
 constexpr unsigned kUnitCount = P3P_AOT_UNIT_COUNT;
 constexpr const char *kLoadBase = P3P_AOT_LOAD_BASE;
 constexpr const char *kUnitSpan = P3P_AOT_UNIT_SPAN;
+// P3P3DS: generator options of the 3DS build (CMakeLists.txt: native leaves, --gpr-cache).
+constexpr const char *kRecompFlags = P3P_BUILDER_RECOMP_FLAGS;
 // Measured on the largest unit and the whole program (docs/3DS_PLATFORM.md
 // section 8.5): GCSE and instruction scheduling cost 27 % of the compile
 // time for 0.8 % of code size. P3P3DS: -O2 since 2026-10-14 (as P3P_AOT_OPT in
@@ -212,6 +215,33 @@ std::uint64_t file_size_or_zero(const fs::path &p) {
     return ec ? 0 : n;
 }
 
+// P3P3DS: whole file, or empty when it cannot be read.
+std::vector<std::uint8_t> read_binary(const fs::path &p) {
+    std::ifstream in(p, std::ios::binary);
+    if (!in) return {};
+    return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)), {});
+}
+
+// P3P3DS: a tool from the builder's sdk/bin, else from PATH; empty when neither has it.
+fs::path find_tool(const fs::path &sdk_bin, const char *name) {
+    if (const fs::path bundled = tool(sdk_bin, name); fs::exists(bundled)) return bundled;
+    const char *path = std::getenv("PATH");
+    if (!path) return {};
+#ifdef _WIN32
+    constexpr char kSep = ';';
+#else
+    constexpr char kSep = ':';
+#endif
+    std::string list = path;
+    for (std::size_t at = 0; at <= list.size();) {
+        const std::size_t end = std::min(list.find(kSep, at), list.size());
+        if (end > at)
+            if (const fs::path candidate = tool(fs::path(list.substr(at, end - at)), name); fs::exists(candidate)) return candidate;
+        at = end + 1;
+    }
+    return {};
+}
+
 } // namespace
 
 Pipeline::Pipeline(Settings settings, Report report, Log log)
@@ -233,6 +263,28 @@ std::string Pipeline::check_iso(const fs::path &iso) {
         return {};
     } catch (const std::exception &e) {
         return std::string("Cannot read the image: ") + e.what();
+    }
+}
+
+std::string Pipeline::check_eboot(const fs::path &eboot) {
+    const auto elf = read_binary(eboot);
+    if (elf.empty()) return "Cannot read this file.";
+    if (elf.size() < 4 || std::memcmp(elf.data(), "\x7f" "ELF", 4) != 0)
+        return "This is not a decrypted EBOOT (no ELF header). Use the file PPSSPP dumps with \"Dump decrypted EBOOT.BIN on game boot\".";
+    if (*kExpectedElfSha256 != '\0' && sha256_hex(elf) != kExpectedElfSha256)
+        return std::string("This decrypted EBOOT is not the one of ") + profile::disc_id_display + " (different SHA-256).";
+    return {};
+}
+
+bool Pipeline::can_decrypt(const fs::path &iso) {
+    try {
+        vfs::IsoFileSystem fsys(iso);
+        const auto src = fsys.open("PSP_GAME/SYSDIR/EBOOT.BIN");
+        if (!src) return false;
+        (void)decrypt_eboot(read_source(src));
+        return true;
+    } catch (const std::exception &) {
+        return false;
     }
 }
 
@@ -294,10 +346,23 @@ int Pipeline::run_tool(const Args &argv, const fs::path &log_file) {
 void Pipeline::decrypt() {
     progress("Reading the game image", 0.0);
     if (const auto problem = check_iso(s_.iso); !problem.empty()) throw std::runtime_error(problem);
-    vfs::IsoFileSystem fsys(s_.iso);
-    const auto eboot = read_source(fsys.open("PSP_GAME/SYSDIR/EBOOT.BIN"));
-    progress("Decrypting the game executable", 0.01);
-    const auto elf = decrypt_eboot(eboot);
+    std::vector<std::uint8_t> elf;
+    if (!s_.eboot.empty()) { // P3P3DS: the user's decrypted EBOOT (PPSSPP dump)
+        progress("Reading the decrypted game executable", 0.01);
+        if (const auto problem = check_eboot(s_.eboot); !problem.empty()) throw std::runtime_error(problem);
+        elf = read_binary(s_.eboot);
+    } else {
+        vfs::IsoFileSystem fsys(s_.iso);
+        const auto eboot = read_source(fsys.open("PSP_GAME/SYSDIR/EBOOT.BIN"));
+        progress("Decrypting the game executable", 0.01);
+        try {
+            elf = decrypt_eboot(eboot);
+        } catch (const std::exception &e) {
+            throw std::runtime_error(std::string(e.what()) +
+                                     "\n\nDump the decrypted EBOOT with PPSSPP (Dump decrypted EBOOT.BIN on game boot, in its developer "
+                                     "tools; the file appears in PSP/SYSTEM/DUMP) and choose it as the decrypted EBOOT.");
+        }
+    }
     const auto sha = sha256_hex(elf);
     if (*kExpectedElfSha256 == '\0') {
         if (log_) log_("Notice: the game profile has no reference SHA-256 yet; the executable is not verified.");
@@ -317,7 +382,7 @@ void Pipeline::generate() {
     if (kUnitCount == 0)
         throw std::runtime_error("The game profile has no measured AOT unit count yet (aot_layout.cmake): this Builder cannot generate code.");
     const std::string want = sha256_hex([&] { std::ifstream in(elf_, std::ios::binary); return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)), {}); }()) +
-                             " " + read_text(s_.sdk / "VERSION", 200);
+                             " " + read_text(s_.sdk / "VERSION", 200) + " " + kRecompFlags;
     if (fs::exists(stamp) && read_text(stamp, 400) == want) {
         if (log_) log_("Generated code is up to date.");
         return;
@@ -326,8 +391,9 @@ void Pipeline::generate() {
     std::error_code ec;
     fs::remove_all(gen_, ec);
     fs::create_directories(gen_);
-    const Args cmd = {tool(s_.sdk / "bin", "psp_recomp"), elf_, "--auto", gen_, kLoadBase, kUnitSpan, s_.sdk / "patches.txt",
-                      "--no-transfer-records"};
+    Args cmd = {tool(s_.sdk / "bin", "psp_recomp"), elf_, "--auto", gen_, kLoadBase, kUnitSpan, s_.sdk / "patches.txt",
+                "--no-transfer-records"};
+    append_words(cmd, kRecompFlags); // P3P3DS: the profile's options, as in the 3DS build
     const fs::path log = s_.work / "generate.log";
     if (run_tool(cmd, log) != 0) throw std::runtime_error("Code generation failed:\n" + read_text(log));
     unsigned units = 0;
@@ -374,7 +440,7 @@ void Pipeline::compile() {
         const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         const auto compiled = done_bytes - start_bytes, remaining = total_bytes - done_bytes;
         if (compiled > total_bytes / 20 && elapsed > 5) eta = elapsed * static_cast<double>(remaining) / static_cast<double>(compiled);
-        progress("Compiling the game code for the 3DS", 0.12 + 0.76 * frac, eta, done, total);
+        progress("Compiling the game code for the 3DS", 0.12 + 0.56 * frac, eta, done, total);
     };
     auto kill_all = [&] {
         for (auto &a : active) kill_child(a.child);
@@ -419,7 +485,7 @@ void Pipeline::compile() {
 }
 
 void Pipeline::link_and_package() {
-    progress("Linking", 0.88);
+    progress("Linking", 0.68);
     const fs::path dkp = s_.devkitpro, lib = s_.sdk / "lib";
     const fs::path rsp = s_.work / "link.rsp";
     {
@@ -436,12 +502,12 @@ void Pipeline::link_and_package() {
     if (run_tool({tool(dkp / "devkitARM" / "bin", "arm-none-eabi-g++"), joined("@", rsp)}, link_log) != 0)
         throw std::runtime_error("Linking failed:\n" + read_text(link_log));
 
-    progress(std::string("Packaging ") + profile::output_3dsx, 0.98);
+    progress(std::string("Packaging ") + profile::output_3dsx, 0.70);
     const fs::path smdh = s_.work / "p3p3ds.smdh", romfs = s_.work / "romfs";
     fs::create_directories(romfs);
     fs::copy_file(elf_, romfs / "eboot.elf", fs::copy_options::overwrite_existing);
     const fs::path tool_log = s_.work / "package.log";
-    if (run_tool({tool(dkp / "tools" / "bin", "smdhtool"), "--create", profile::app_name, std::string(profile::game_title) + " recompilation", "wg481, based on P3P3DS by enderlit aka endercodezz",
+    if (run_tool({tool(dkp / "tools" / "bin", "smdhtool"), "--create", P3P_SMDH_NAME, P3P_SMDH_DESCRIPTION, P3P_SMDH_AUTHOR,
                   dkp / "libctru" / "default_icon.png", smdh},
                  tool_log) != 0)
         throw std::runtime_error("smdhtool failed:\n" + read_text(tool_log));
@@ -449,7 +515,71 @@ void Pipeline::link_and_package() {
     if (run_tool({tool(dkp / "tools" / "bin", "3dsxtool"), s_.work / "p3p3ds.elf", s_.output, joined("--smdh=", smdh), joined("--romfs=", romfs)},
                  tool_log) != 0)
         throw std::runtime_error("3dsxtool failed:\n" + read_text(tool_log));
-    progress("Done", 1.0);
+}
+
+// P3P3DS: music and movies (media.cpp); only files the media folder does not have yet are converted.
+void Pipeline::convert_media() {
+    const fs::path out = media_folder(s_.output);
+    media::Tools t;
+    t.ffmpeg = find_tool(s_.sdk / "bin", "ffmpeg");
+    t.ffprobe = find_tool(s_.sdk / "bin", "ffprobe");
+    if (t.ffmpeg.empty() || t.ffprobe.empty())
+        throw std::runtime_error("ffmpeg and ffprobe were not found (sdk/bin of the builder): reinstall the builder.");
+    t.temp = s_.work / "media_tmp";
+    t.run = [this](const std::vector<fs::path> &argv, const fs::path &log) { return run_tool(argv, log); };
+    t.log = log_;
+    t.progress = [this](unsigned done, unsigned total, const std::string &name) {
+        std::string step = "Converting music and movies";
+        if (!name.empty()) step += " (" + name + ")";
+        progress(step, 0.72 + 0.25 * (total ? static_cast<double>(done) / total : 1.0), -1, done, total);
+    };
+    vfs::IsoFileSystem fsys(s_.iso);
+    const auto r = media::convert(fsys, "PSP_GAME/USRDIR", out, t);
+    std::error_code ec;
+    fs::remove_all(t.temp, ec);
+    if (log_)
+        log_("Media: " + std::to_string(r.tracks) + " music tracks, " + std::to_string(r.movies) + " movies (" + std::to_string(r.converted) +
+             " converted now) in " + out.string());
+}
+
+// P3P3DS: the .cia next to the .3dsx (platform/3ds/cia/make_cia.cmake): bannertool makes the HOME Menu
+// banner (and the icon when the banner folder has icon.png), makerom the .cia from the linked ELF.
+void Pipeline::make_cia() {
+    progress("Making the .cia", 0.97);
+    const fs::path bin = s_.sdk / "bin", cia = s_.work / "cia";
+    const fs::path bannertool = find_tool(bin, "bannertool"), makerom = find_tool(bin, "makerom");
+    if (bannertool.empty() || makerom.empty()) throw std::runtime_error("bannertool and makerom were not found (sdk/bin of the builder): reinstall the builder.");
+    auto has = [](const fs::path &dir, const char *f) { return !dir.empty() && fs::exists(dir / f); };
+    const fs::path assets = has(s_.banner, "banner.png") && has(s_.banner, "audio.wav") ? s_.banner : s_.sdk / "cia";
+    if (!has(assets, "banner.png") || !has(assets, "audio.wav")) throw std::runtime_error("banner.png or audio.wav is missing in " + assets.string() + ".");
+    fs::create_directories(cia);
+    const fs::path log = s_.work / "cia.log";
+    if (run_tool({bannertool, "makebanner", "-i", assets / "banner.png", "-a", assets / "audio.wav", "-o", cia / "banner.bnr"}, log) != 0)
+        throw std::runtime_error("bannertool failed:\n" + read_text(log));
+    fs::path icon = s_.work / "p3p3ds.smdh";
+    const fs::path icon_assets = has(s_.banner, "icon.png") ? s_.banner : has(s_.sdk / "cia", "icon.png") ? s_.sdk / "cia" : fs::path();
+    if (!icon_assets.empty()) {
+        icon = cia / "icon.smdh";
+        if (run_tool({bannertool, "makesmdh", "-s", P3P_SMDH_NAME, "-l", P3P_SMDH_DESCRIPTION, "-p", P3P_SMDH_AUTHOR, "-i", icon_assets / "icon.png", "-o", icon},
+                     log) != 0)
+            throw std::runtime_error("bannertool failed:\n" + read_text(log));
+    }
+    // The RSF of the 3DS build, with the profile's values and an absolute romfs path.
+    std::string rsf = read_text(s_.sdk / "cia" / "p3p3ds.rsf.in", 1u << 20);
+    auto fill = [&](const std::string &key, const std::string &value) {
+        for (std::size_t at; (at = rsf.find(key)) != std::string::npos;) rsf.replace(at, key.size(), value);
+    };
+    fill("@P3P_PROFILE_CIA_TITLE@", P3P_CIA_TITLE);
+    fill("@P3P_PROFILE_CIA_PRODUCT_CODE@", P3P_CIA_PRODUCT_CODE);
+    fill("@P3P_PROFILE_CIA_UNIQUE_ID@", P3P_CIA_UNIQUE_ID);
+    fill("RootPath: \"romfs\"", "RootPath: \"" + (s_.work / "romfs").generic_string() + "\"");
+    write_text(cia / "p3p3ds.rsf", rsf);
+    const fs::path out = cia_file(s_.output);
+    if (run_tool({makerom, "-f", "cia", "-o", out, "-target", "t", "-exefslogo", "-rsf", cia / "p3p3ds.rsf", "-elf", s_.work / "p3p3ds.elf", "-icon", icon,
+                  "-banner", cia / "banner.bnr"},
+                 log) != 0)
+        throw std::runtime_error("makerom failed:\n" + read_text(log));
+    if (log_) log_("CIA: " + out.string());
 }
 
 void Pipeline::run() {
@@ -470,6 +600,9 @@ void Pipeline::run() {
     generate();
     compile();
     link_and_package();
+    convert_media(); // P3P3DS
+    if (s_.cia) make_cia(); // P3P3DS
+    progress("Done", 1.0);
 }
 
 } // namespace p3p3ds::builder

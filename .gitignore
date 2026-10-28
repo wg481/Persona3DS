@@ -113,3 +113,6 @@ profiles/*/input/local/
 /recomp/*
 !/recomp/PSPRecomp/
 /tools/*/
+
+# P3P3DS: the maintainer's own .cia tools and banner art (make -C build/3ds cia, make_release.py)
+/banner/

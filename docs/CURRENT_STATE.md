@@ -2,6 +2,14 @@
 
 This is the current source of truth, newest entries first. Since 2026-10-11 this fork targets Persona (ULUS-10432); every entry below the retarget section is upstream P3P3DS evidence about ULUS-10512 and does not describe Persona; each section says whether it was measured on the PC runner, in Azahar or on a real New 3DS.
 
+## Persona3DS Builder: decrypted EBOOT, media, .cia (2026-10-27)
+
+- Maintainer's request: one download that builds the game for outside users without MSYS2 or a clone; devkitPro stays a separate install (its About page asks not to bundle its tools; [VERIFIED] https://devkitpro.org/wiki/About), ffmpeg is bundled.
+- Change (upstream's Builder, `platform/pc/builder/`, kept mergeable): `Settings::eboot` takes PPSSPP's decrypted EBOOT when the built-in decryptor cannot read the ISO's (Persona's tag 0xD9160BF0), checked against the profile's SHA-256; the generator gets the 3DS build's options (`P3P_BUILDER_RECOMP_FLAGS`: the profile's `--native-leaf` list and `--gpr-cache`, from CMake); the `.3dsx` metadata and `.cia` values come from `profile.cmake`. New steps: `media.cpp` converts the music and movies into `<output folder>/media` with the bundled ffmpeg (files that exist are not converted again), `make_cia` builds `<output>.cia` with the bundled bannertool and makerom (banner art from a `banner/` folder next to the Builder, else the package's defaults). Wizard: decrypted EBOOT field (needed only when the ISO cannot be decrypted), `.cia` checkbox, the SD card copy includes `persona3ds/media` and `cia/`. Console: `--eboot`, `--cia`, `--banner`. `make_release.py`: `--ffmpeg`, `--cia-tools`, `sdk/cia/`, `THIRD_PARTY_NOTICES.txt`.
+- [VERIFIED] `media.cpp` against `tools/convert_media.py` (same ffmpeg 6.1, Linux): the 11 `.at3`/`.pmf` files of pspautotests in nested folders give byte-identical `index.txt`, WAV, `.h264` and `.idx` files, and the same skipped file; a synthetic PSMF with an ATRAC3plus stream gives the same OMA (2,976 bytes). Test `p3p_builder_media` (CTest 30/30). Windows sources compile with mingw-w64 (syntax check); CI builds them.
+- [VERIFIED] bannertool (built from source) makes a banner from the default `platform/pc/builder/cia/banner.png` and a silent 1 s WAV (the one `make_release.py` writes).
+- [UNVERIFIED] the whole Builder run on Windows with devkitPro (decrypted EBOOT, compile, link, media, `.cia` with makerom) and the result on hardware.
+
 ## Guest registers in block locals (`--gpr-cache`) (2026-10-16)
 
 - [VERIFIED] Profile `d4e17f3d`: `0884c664` is 29.6 % of generated-code samples, 4,447 of them in block `0884d8e4`. Its instructions (maintainer's `dump_function`, `0x0884D8E4-0x0884DC28`) and generated C++ (`generated_unit_0018.cpp`): one straight block of about 180 guest instructions (byte stores of halved values, four `swl`/`swr` pairs, 12 float stores) before `jal 0x08974808`.
