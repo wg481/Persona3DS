@@ -1,8 +1,8 @@
 // P3P3DS Builder around pipeline.cpp. Portable: sdk/, work/ and output/ live
 // next to the executable.
 // Windows: a wizard (Win32, no external UI library);
-// `P3P3DS-Builder.exe --cli --iso <iso> [--devkitpro <dir>] [--out <file>]
-// [--jobs <n>] [--work <dir>]` runs the same build in a console.
+// `P3P3DS-Builder.exe --cli --iso <iso> [--eboot <decrypted EBOOT>] [--cia] [--banner <dir>]
+// [--devkitpro <dir>] [--out <file>] [--jobs <n>] [--work <dir>]` runs the same build in a console.
 // Linux and other POSIX hosts: console only, same options (`--cli` optional).
 #include "pipeline.hpp"
 #include "profile_info.hpp"
@@ -38,6 +38,7 @@ Settings default_settings(const fs::path &exe_dir) {
     s.work = exe_dir / "work";
     s.output = exe_dir / "output" / p3p3ds::profile::output_3dsx;
     s.devkitpro = Pipeline::find_devkitpro();
+    if (fs::exists(exe_dir / "banner")) s.banner = exe_dir / "banner"; // P3P3DS: the user's own .cia banner
     return s;
 }
 
@@ -59,6 +60,8 @@ int run_console(const Settings &s) {
     }
     std::printf("OK in %.0f s: %s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
                 s.output.string().c_str());
+    std::printf("Music and movies: %s\n", Pipeline::media_folder(s.output).string().c_str());
+    if (s.cia) std::printf("CIA: %s\n", Pipeline::cia_file(s.output).string().c_str());
     return 0;
 }
 
@@ -67,12 +70,13 @@ int run_console(const Settings &s) {
 #ifdef _WIN32
 namespace {
 
-constexpr int kWidth = 620, kHeight = 470, kHeader = 64;
+constexpr int kWidth = 620, kHeight = 560, kHeader = 64;
 constexpr UINT WM_BUILD_PROGRESS = WM_APP + 1, WM_BUILD_LOG = WM_APP + 2, WM_BUILD_DONE = WM_APP + 3;
 constexpr UINT_PTR kFactTimer = 1;
 enum Id : int {
     IdBack = 100, IdNext, IdCancel,
     IdIso, IdIsoBrowse, IdIsoStatus, IdDkp, IdDkpBrowse, IdDkpStatus, IdDkpLink, IdOut, IdOutBrowse, IdSdCheck, IdSdDrive,
+    IdEboot, IdEbootBrowse, IdEbootStatus, IdCiaCheck,
     IdStep, IdBar, IdTime, IdFact, IdNextFact, IdLog, IdOpenFolder,
 };
 enum Page { Welcome, Setup, Build, Finish };
@@ -85,6 +89,9 @@ struct App {
     std::vector<std::pair<Page, HWND>> controls;
     HWND back{}, next{}, cancel{};
     HWND iso{}, iso_status{}, dkp{}, dkp_status{}, out{}, sd_check{}, sd_drive{};
+    HWND eboot{}, eboot_status{}, cia_check{}; // P3P3DS
+    std::wstring decrypt_checked_iso; // P3P3DS: ISO whose EBOOT the built-in decryptor was tried on
+    bool iso_decrypts{};
     HWND step{}, bar{}, time{}, fact{}, log{}, finish_text{}, open_folder{};
     fs::path exe_dir;
     std::unique_ptr<Pipeline> pipeline;
@@ -131,9 +138,22 @@ void validate() {
     const auto iso = fs::path(text_of(app.iso));
     const auto iso_problem = iso.empty() ? (std::string("Choose your ") + p3p3ds::profile::game_title + " ISO.") : Pipeline::check_iso(iso);
     SetWindowTextW(app.iso_status, iso_problem.empty() ? L"✔ Shin Megami Tensei: Persona (ULUS-10432)" : widen(iso_problem).c_str());
+    // P3P3DS: the decrypted EBOOT (PPSSPP dump) is needed when the built-in decryptor cannot read the ISO's.
+    if (iso_problem.empty() && app.decrypt_checked_iso != iso.wstring()) {
+        app.decrypt_checked_iso = iso.wstring();
+        app.iso_decrypts = Pipeline::can_decrypt(iso);
+    }
+    const auto eboot = fs::path(text_of(app.eboot));
+    std::string eboot_problem;
+    if (!eboot.empty()) eboot_problem = Pipeline::check_eboot(eboot);
+    else if (!(iso_problem.empty() && app.iso_decrypts))
+        eboot_problem = "Choose the decrypted EBOOT that PPSSPP dumps (needed for this game).";
+    SetWindowTextW(app.eboot_status, eboot_problem.empty() ? (eboot.empty() ? L"✔ Not needed: the builder decrypts this ISO itself"
+                                                                            : L"✔ Decrypted EBOOT of ULUS-10432")
+                                                           : widen(eboot_problem).c_str());
     const auto dkp_problem = Pipeline::check_devkitpro(fs::path(text_of(app.dkp)));
     SetWindowTextW(app.dkp_status, dkp_problem.empty() ? L"✔ devkitPro with 3DS development tools" : widen(dkp_problem).c_str());
-    EnableWindow(app.next, iso_problem.empty() && dkp_problem.empty() && !text_of(app.out).empty());
+    EnableWindow(app.next, iso_problem.empty() && eboot_problem.empty() && dkp_problem.empty() && !text_of(app.out).empty());
 }
 
 void fill_drives() {
@@ -190,6 +210,9 @@ void start_build() {
     s.output = fs::path(text_of(app.out));
     s.sdk = app.exe_dir / "sdk";
     s.work = app.exe_dir / "work";
+    s.eboot = fs::path(text_of(app.eboot)); // P3P3DS
+    s.cia = SendMessageW(app.cia_check, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (fs::exists(app.exe_dir / "banner")) s.banner = app.exe_dir / "banner";
     std::wstring sd;
     if (SendMessageW(app.sd_check, BM_GETCHECK, 0, 0) == BST_CHECKED) sd = text_of(app.sd_drive).substr(0, 2);
     const HWND wnd = app.wnd;
@@ -212,6 +235,14 @@ void start_build() {
                 fs::create_directories(root / "3ds");
                 fs::create_directories(root / p3p3ds::profile::sd_folder);
                 fs::copy_file(s.output, root / "3ds" / p3p3ds::profile::output_3dsx, fs::copy_options::overwrite_existing);
+                // P3P3DS: the converted music and movies, and the .cia for FBI.
+                PostMessageW(wnd, WM_BUILD_PROGRESS, 0, reinterpret_cast<LPARAM>(new Progress{"Copying music and movies to the SD card", 1.0}));
+                fs::copy(Pipeline::media_folder(s.output), root / p3p3ds::profile::sd_folder / "media",
+                         fs::copy_options::recursive | fs::copy_options::update_existing);
+                if (s.cia) {
+                    fs::create_directories(root / "cia");
+                    fs::copy_file(Pipeline::cia_file(s.output), root / "cia" / Pipeline::cia_file(s.output).filename(), fs::copy_options::overwrite_existing);
+                }
                 const fs::path iso_target = root / p3p3ds::profile::sd_folder / s.iso.filename();
                 std::error_code ec;
                 if (!fs::exists(iso_target) || fs::file_size(iso_target, ec) != fs::file_size(s.iso, ec)) {
@@ -241,11 +272,12 @@ void create_controls() {
     add(Welcome, L"STATIC", L"Welcome to the Persona3DS Builder", SS_LEFT, left, y, width, 28, 0, app.title);
     add(Welcome, L"STATIC",
         L"This wizard builds Persona3DS - Shin Megami Tensei: Persona (PSP) for the New Nintendo 3DS - "
-        L"from your own copy of the game (ULUS-10432). The port does not boot yet.\n\n"
-        L"It reads the game's executable from your ISO, translates it to native 3DS code and packages "
-        L"persona3ds.3dsx for the Homebrew Launcher. Nothing is downloaded.\n\n"
-        L"You need: your Persona ISO, and devkitPro with the 3DS development tools installed. "
-        L"The build takes about 5-15 minutes depending on your CPU.\n\n"
+        L"from your own copy of the game (ULUS-10432).\n\n"
+        L"It translates the game's executable to native 3DS code, packages persona3ds.3dsx for the "
+        L"Homebrew Launcher (and a .cia if you want one), and converts the music and movies. Nothing is downloaded.\n\n"
+        L"You need: your Persona ISO, its decrypted EBOOT dumped with PPSSPP, and devkitPro with the 3DS "
+        L"development tools installed. The first build takes about 15-45 minutes depending on your CPU "
+        L"(most of it converting the movies, which is done only once).\n\n"
         L"The result contains code made from your game: it is for you only. Please do not share it.\n\n"
         L"Persona3DS by wg481, based on P3P3DS by enderlit aka endercodezz. Persona © ATLUS. This project is not affiliated with ATLUS or SEGA.",
         SS_LEFT, left, y + 40, width, 260);
@@ -254,6 +286,12 @@ void create_controls() {
     app.iso = add(Setup, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, left, y + 20, width - 100, 24, IdIso);
     add(Setup, L"BUTTON", L"Browse...", BS_PUSHBUTTON, left + width - 92, y + 19, 92, 26, IdIsoBrowse);
     app.iso_status = add(Setup, L"STATIC", L"", SS_LEFT, left, y + 48, width, 18, IdIsoStatus);
+    y += 78;
+    // P3P3DS: the decrypted EBOOT (PPSSPP: Dump decrypted EBOOT.BIN on game boot -> PSP/SYSTEM/DUMP).
+    add(Setup, L"STATIC", L"Decrypted EBOOT dumped by PPSSPP (PSP/SYSTEM/DUMP/ULUS10432.BIN):", SS_LEFT, left, y, width, 18);
+    app.eboot = add(Setup, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, left, y + 20, width - 100, 24, IdEboot);
+    add(Setup, L"BUTTON", L"Browse...", BS_PUSHBUTTON, left + width - 92, y + 19, 92, 26, IdEbootBrowse);
+    app.eboot_status = add(Setup, L"STATIC", L"", SS_LEFT, left, y + 48, width, 18, IdEbootStatus);
     y += 78;
     add(Setup, L"STATIC", L"devkitPro folder (with the 3DS development tools):", SS_LEFT, left, y, width, 18);
     app.dkp = add(Setup, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL, left, y + 20, width - 100, 24, IdDkp);
@@ -267,6 +305,8 @@ void create_controls() {
     y += 60;
     app.sd_check = add(Setup, L"BUTTON", L"Also copy Persona3DS and the ISO to my SD card:", BS_AUTOCHECKBOX, left, y, 300, 22, IdSdCheck);
     app.sd_drive = add(Setup, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, left + 310, y, 160, 200, IdSdDrive);
+    y += 28;
+    app.cia_check = add(Setup, L"BUTTON", L"Also make an installable .cia (for FBI or a similar title manager)", BS_AUTOCHECKBOX, left, y, width, 22, IdCiaCheck);
     y += 30;
     wchar_t jobs[96];
     swprintf(jobs, 96, L"The build will use %u parallel compiler jobs on this PC.", Pipeline::automatic_jobs());
@@ -342,7 +382,7 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = reinterpret_cast<HDC>(wp);
         SetBkMode(dc, TRANSPARENT);
         const HWND c = reinterpret_cast<HWND>(lp);
-        const std::wstring t = (c == app.iso_status || c == app.dkp_status) ? text_of(c) : std::wstring();
+        const std::wstring t = (c == app.iso_status || c == app.dkp_status || c == app.eboot_status) ? text_of(c) : std::wstring();
         if (!t.empty()) SetTextColor(dc, t[0] == L'✔' ? RGB(0, 120, 40) : RGB(180, 30, 30));
         return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_BTNFACE));
     }
@@ -360,6 +400,9 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         } else if (id == IdIsoBrowse) {
             const auto f = browse_file(L"PSP disc image (*.iso)\0*.iso\0All files\0*.*\0", false, text_of(app.iso));
             if (!f.empty()) SetWindowTextW(app.iso, f.c_str());
+        } else if (id == IdEbootBrowse) {
+            const auto f = browse_file(L"Decrypted EBOOT (*.BIN; *.elf)\0*.BIN;*.elf\0All files\0*.*\0", false, text_of(app.eboot));
+            if (!f.empty()) SetWindowTextW(app.eboot, f.c_str());
         } else if (id == IdDkpBrowse) {
             const auto f = browse_folder(L"Choose the devkitPro folder (contains devkitARM, libctru, tools)");
             if (!f.empty()) SetWindowTextW(app.dkp, f.c_str());
@@ -373,7 +416,7 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         } else if (id == IdOpenFolder) {
             const auto dir = fs::path(text_of(app.out)).parent_path();
             ShellExecuteW(h, L"open", dir.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        } else if ((id == IdIso || id == IdDkp || id == IdOut) && HIWORD(wp) == EN_CHANGE && app.page == Setup) {
+        } else if ((id == IdIso || id == IdEboot || id == IdDkp || id == IdOut) && HIWORD(wp) == EN_CHANGE && app.page == Setup) {
             validate();
         }
         return 0;
@@ -413,8 +456,12 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                    L"\n\nTo play on your New 3DS, put on the SD card:\n"
                    L"    \\3ds\\persona3ds.3dsx\n"
                    L"    \\persona3ds\\<your game>.iso\n"
-                   L"and start Persona3DS from the Homebrew Launcher.\n\n"
-                   L"Keep this file to yourself: it contains code made from your copy of the game.";
+                   L"    \\persona3ds\\media\\  (the media folder from the output folder)\n"
+                   L"    \\3ds\\dspfirm.cdc  (DSP firmware dump, for sound)\n"
+                   L"and start Persona3DS from the Homebrew Launcher";
+            if (SendMessageW(app.cia_check, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                text += L", or install persona3ds.cia with FBI and start it from the HOME Menu";
+            text += L".\n\nKeep these files to yourself: they contain code made from your copy of the game.";
             ShowWindow(app.open_folder, SW_SHOW);
         } else {
             text = L"The build stopped.\n\n" + widen(*err) + L"\n\nDetails are in the work folder next to the builder.";
@@ -446,7 +493,10 @@ int run_cli(int argc, wchar_t **argv) {
     Settings s = default_settings(app.exe_dir);
     for (int i = 1; i + 1 < argc; ++i) {
         const std::wstring a = argv[i];
+        if (a == L"--cia") { s.cia = true; continue; } // P3P3DS
         if (a == L"--iso") s.iso = argv[++i];
+        else if (a == L"--eboot") s.eboot = argv[++i];
+        else if (a == L"--banner") s.banner = argv[++i];
         else if (a == L"--devkitpro") s.devkitpro = argv[++i];
         else if (a == L"--out") s.output = argv[++i];
         else if (a == L"--jobs") s.jobs = static_cast<unsigned>(_wtoi(argv[++i]));
@@ -519,16 +569,20 @@ int main(int argc, char **argv) {
         const std::string a = argv[i];
         const bool has_value = i + 1 < argc;
         if (a == "--cli") continue;
+        if (a == "--cia") { s.cia = true; continue; } // P3P3DS
         if (a == "--help" || a == "-h") {
-            std::printf("usage: %s --iso <ULUS-10432.iso> [--devkitpro <dir>] [--out <file.3dsx>] [--jobs <n>] [--work <dir>]\n", argv[0]);
+            std::printf("usage: %s --iso <ULUS-10432.iso> [--eboot <decrypted EBOOT>] [--cia] [--banner <dir>] [--devkitpro <dir>] "
+                        "[--out <file.3dsx>] [--jobs <n>] [--work <dir>]\n", argv[0]);
             return 0;
         }
-        if (!has_value || (a != "--iso" && a != "--devkitpro" && a != "--out" && a != "--jobs" && a != "--work")) {
+        if (!has_value || (a != "--iso" && a != "--eboot" && a != "--banner" && a != "--devkitpro" && a != "--out" && a != "--jobs" && a != "--work")) {
             std::fprintf(stderr, "unknown or incomplete option: %s (see --help)\n", a.c_str());
             return 2;
         }
         const char *v = argv[++i];
         if (a == "--iso") s.iso = v;
+        else if (a == "--eboot") s.eboot = v;
+        else if (a == "--banner") s.banner = v;
         else if (a == "--devkitpro") s.devkitpro = v;
         else if (a == "--out") s.output = v;
         else if (a == "--work") s.work = v;

@@ -389,8 +389,9 @@ add_executable(test_ge_renderer tests/test_ge_renderer.cpp)
 target_link_libraries(test_ge_renderer PRIVATE p3p3ds_core)
 add_test(NAME p3p_ge_renderer COMMAND test_ge_renderer)
 # Builder (ISO -> .3dsx) pieces that run on the host and are unit-tested here.
-add_library(p3p3ds_builder_core STATIC platform/pc/builder/psp_eboot.cpp)
+add_library(p3p3ds_builder_core STATIC platform/pc/builder/psp_eboot.cpp platform/pc/builder/media.cpp)
 target_include_directories(p3p3ds_builder_core PUBLIC platform/pc/builder "${P3P_PROFILE_DIR}/config")
+target_link_libraries(p3p3ds_builder_core PUBLIC p3p3ds_core) # P3P3DS: media.cpp reads the ISO through vfs
 # AOT layout of the selected profile (an empty unit count builds as 0: the
 # Builder refuses to generate until the profile is measured).
 if(P3P_AOT_UNIT_COUNT)
@@ -398,8 +399,19 @@ if(P3P_AOT_UNIT_COUNT)
 else()
     set(_p3p_builder_units 0)
 endif()
+# P3P3DS: the generator options of the 3DS build (platform/3ds/CMakeLists.txt): the profile's native
+# leaves and the block register cache, and the profile's .3dsx/.cia metadata.
+set(_p3p_builder_recomp "")
+foreach(_leaf IN LISTS P3P_AOT_NATIVE_LEAVES)
+    string(APPEND _p3p_builder_recomp "--native-leaf ${_leaf} ")
+endforeach()
+string(APPEND _p3p_builder_recomp "--gpr-cache")
 target_compile_definitions(p3p3ds_builder_core PUBLIC P3P_AOT_UNIT_COUNT=${_p3p_builder_units}
-    P3P_AOT_LOAD_BASE="${P3P_AOT_LOAD_BASE}" P3P_AOT_UNIT_SPAN="${P3P_AOT_UNIT_SPAN}")
+    P3P_AOT_LOAD_BASE="${P3P_AOT_LOAD_BASE}" P3P_AOT_UNIT_SPAN="${P3P_AOT_UNIT_SPAN}"
+    P3P_BUILDER_RECOMP_FLAGS="${_p3p_builder_recomp}"
+    P3P_SMDH_NAME="${P3P_PROFILE_SMDH_NAME}" P3P_SMDH_DESCRIPTION="${P3P_PROFILE_SMDH_DESCRIPTION}"
+    P3P_SMDH_AUTHOR="${P3P_PROFILE_SMDH_AUTHOR}" P3P_CIA_TITLE="${P3P_PROFILE_CIA_TITLE}"
+    P3P_CIA_PRODUCT_CODE="${P3P_PROFILE_CIA_PRODUCT_CODE}" P3P_CIA_UNIQUE_ID="${P3P_PROFILE_CIA_UNIQUE_ID}")
 if(WIN32)
     enable_language(RC)
     add_executable(p3p3ds_builder WIN32 platform/pc/builder/builder_main.cpp platform/pc/builder/pipeline.cpp platform/pc/builder/builder.rc)
@@ -414,6 +426,11 @@ else()
     target_link_libraries(p3p3ds_builder PRIVATE p3p3ds_builder_core p3p3ds_core)
 endif()
 set_target_properties(p3p3ds_builder PROPERTIES OUTPUT_NAME "P3P3DS-Builder")
+# P3P3DS: Builder media conversion (C++ port of tools/convert_media.py).
+add_executable(test_builder_media tests/test_builder_media.cpp)
+target_link_libraries(test_builder_media PRIVATE p3p3ds_builder_core p3p3ds_core)
+target_compile_definitions(test_builder_media PRIVATE P3P_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME p3p_builder_media COMMAND test_builder_media)
 add_executable(test_psp_eboot tests/test_psp_eboot.cpp)
 target_link_libraries(test_psp_eboot PRIVATE p3p3ds_builder_core p3p3ds_core)
 file(GLOB P3P_LOCAL_ISOS "${CMAKE_CURRENT_SOURCE_DIR}/*.iso")

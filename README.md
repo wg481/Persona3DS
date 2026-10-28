@@ -15,6 +15,18 @@ Tested on a New 3DS, from New Game through the first dungeon:
 
 Play beyond the first dungeon has not been tested yet. Open issues and measurements are in [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md), newest first.
 
+## Easiest: the Persona3DS Builder
+
+The Builder is a wizard on Windows, or a console program on Linux. It makes everything from your own copy of the game, with no repository clone, MSYS2 or shell. Download it from the [releases](https://github.com/wg481/Persona3DS/releases), unpack it and run `P3P3DS-Builder.exe`. You need:
+
+- your *Shin Megami Tensei: Persona* `ULUS-10432` ISO;
+- its decrypted `EBOOT.BIN`, dumped with PPSSPP (see [What you need](#what-you-need));
+- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS development tools, installed once with devkitPro's own installer.
+
+The Builder translates and compiles the game code, packages `persona3ds.3dsx` and converts the music and movies into `output/media`. It can also make an installable `.cia` and copy everything to your SD card. ffmpeg and the `.cia` tools come with the Builder. The first build takes about 15–45 minutes, mostly converting the movies, which happens only once. Linux: `./P3P3DS-Builder --iso <iso> --eboot <dump> [--cia]`.
+
+The sections below are for building from source.
+
 ## What you need
 
 - Your own *Shin Megami Tensei: Persona* `ULUS-10432` ISO (MD5 `c75f75b0f1e92d7cca77d75585bebd82`).
@@ -87,6 +99,20 @@ The `.cia` installs to the HOME Menu with FBI or a similar title manager. It run
 3. Install `build/3ds/p3p3ds.cia`.
 
 The title, product code and unique id are in `profiles/p1p/config/profile.cmake`. The process settings (New 3DS 124 MB mode, 804 MHz, L2 cache, core 2) are in `platform/3ds/cia/p3p3ds.rsf.in`. `-DP3P_BANNER_DIR=<folder>` uses a different banner folder.
+
+## Making a Builder release
+
+For maintainers: after the PC build and the 3DS build (`make -C build/3ds`), in the shell of the PC build:
+
+```bash
+python platform/pc/builder/make_release.py --version <x.y.z> --ffmpeg <folder> --devkitpro <devkitPro folder>
+```
+
+- **`--ffmpeg`** is a self-contained ffmpeg build with libx264, containing `ffmpeg` and `ffprobe`; on Windows, a static "GPL" build. MSYS2's ffmpeg needs MSYS2's DLLs and won't work outside it.
+- **makerom and bannertool** come from `banner/` (or `--cia-tools <folder>`).
+- **The default `.cia` banner** comes from `banner/banner.png` and `banner/audio.wav` when present, otherwise `platform/pc/builder/cia/banner.png` with a silent sound.
+
+The package and its `.zip` (Windows) or `.tar.gz` (Linux) are written to `out/`. Its `THIRD_PARTY_NOTICES.txt` lists the bundled tools' licenses and source code.
 
 ## Debugging
 
